@@ -1,6 +1,6 @@
 Fork process from Java using a remote daemon.
 
-It is useful in environments where there are not enough memory
+It is useful in environments where there is not enough memory
 and you could finish having OutOfMemory exceptions while 
 trying to run system processes.
 
