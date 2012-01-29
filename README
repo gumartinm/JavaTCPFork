@@ -5,5 +5,5 @@ and you could finish having OutOfMemory exceptions while
 trying to run system processes.
 
 
-If you want to know more about memory overcommit in Linux see:
+If you want to find out more about memory overcommit in Linux see:
 http://developers.sun.com/solaris/articles/subprocess/subprocess.html
