@@ -364,13 +364,50 @@ int readable_timeout (int fd, long timeout, long utimeout)
 {
     struct timeval ptime;   /*Timeout, secs and usecs*/
     fd_set fd_read;         /*Values for select function.*/
+    int ret;                /*Store return value from select.*/
 
     ptime.tv_sec = timeout;
     ptime.tv_usec = utimeout;
     FD_ZERO(&fd_read);
     FD_SET(fd, &fd_read);
   
-    return TEMP_FAILURE_RETRY(select(fd+1, &fd_read, NULL, NULL, &ptime)); 
+    ret = TEMP_FAILURE_RETRY(select(fd+1, &fd_read, NULL, NULL, &ptime)); 
+    
+    if (ret == 0) {
+        syslog(LOG_INFO, "receiving timeout error");
+        return -1;
+    } else if (ret == -1) {
+        syslog(LOG_ERR, "receiving error: %m");
+        return -1;
+    }
+
+    return ret;
+}
+
+
+
+int readable (int socket, char *data, int len, int flags) 
+{
+    int received;   /*Stores received data from socket*/
+
+    received = TEMP_FAILURE_RETRY(recv(socket, data, len, flags));
+
+    if (received < 0) {
+        if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+            syslog (LOG_ERR, "read TCP socket failed: %m");
+            return -1;
+        } else {
+            /*see spurious readiness man select(2) BUGS section*/
+            received = 0;
+            syslog (LOG_INFO, "read TCP socket spurious readiness");
+        }
+    } else if (received == 0) {
+        /*if nData is 0, client closed connection but we wanted to receive more data, this is an error */
+        syslog (LOG_ERR, "expected more data, closed connection from client");
+        return -1;
+    }
+
+    return received;
 }
 
 
@@ -378,36 +415,14 @@ int readable_timeout (int fd, long timeout, long utimeout)
 int receive_from_socket (int socket, char *data, int len, long timeout, long utimeout)
 {
     int nData, iPos;	/*Control variables.*/
-    int ret;            /*Store return value from select.*/
 
     nData = iPos = 0;
     do {
-        ret = readable_timeout(socket, timeout, utimeout);
-
-        if (ret == 0) {
-            syslog(LOG_INFO, "receiving timeout error");
+        if (readable_timeout(socket, timeout, utimeout) < 0)
             return -1;
-        } else if (ret == -1) {
-            syslog(LOG_ERR, "receiving error: %m");
+        
+        if ((nData = readable (socket, &data[iPos], len, 0)) < 0)
             return -1;
-        }
-
-        nData = TEMP_FAILURE_RETRY(recv(socket, &data[iPos], len, 0));
-
-        if (nData < 0) {
-            if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
-                syslog (LOG_ERR, "read TCP socket failed: %m");
-                return -1;
-            } else {
-                /*see spurious readiness man select(2) BUGS section*/
-                nData = 0;
-                syslog (LOG_INFO, "read TCP socket spurious readiness");
-            }
-        } else if (nData == 0) {
-            /*if nData is 0, client closed connection but we wanted to receive more data, this is an error */
-            syslog (LOG_ERR, "expected more data from client");
-            return -1;
-        }
 
         len -= nData;
         iPos += nData;
@@ -437,7 +452,7 @@ int pre_fork_system(int socket, char *command)
 	
     /*Allocate shared memory because we can not use named semaphores*/
     /*We are using this semaphore as a barrier, because we just want to start the child process when the parent process has sent*/
-    /*the XML header (see: for_system function)*/
+    /*the XML header (see: fork_system function)*/
 	
     keysemaphore=ftok("/bin/ls", SHAREMEMSEM);  /*the /bin/ls must exist otherwise this does not work... */
     if (keysemaphore == -1) {
@@ -575,6 +590,9 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
             exit(-1);
         }
 
+        /*TODO: I should use execve with setlocale instead of system.*/
+        /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
+        /* will be ignored. From man system(3)*/
         *returnstatus=system(command);
         if (WIFEXITED(returnstatus) == 1)
             (*returnstatus) = WEXITSTATUS(*returnstatus);
@@ -588,8 +606,7 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
         /*It sends data to the Java client using a TCP connection.*/
         polls[0].fd=out[0];
         polls[1].fd=err[0];
-        polls[0].events=POLLIN;
-        polls[1].events=POLLIN;
+        polls[0].events = polls[1].events = POLLIN;
         sprintf(string,"<?xml version=\"1.0\"?>");
         send(socket,string,strlen(string),0);
         sprintf(string,"<streams>");
@@ -598,17 +615,26 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
         /*Releasing barrier, the child process can keep running*/
         if (sem_post(semaphore) < 0 ) {
             syslog (LOG_ERR, "parent error releasing barrier: %m");
-            /*TODO: May I kill a child process if it is already dead? I mean,   */
-            /*      what could happen if the child process is dead?             */
-            /*      Should I implement a SIGCHILD handler?                      */
-            /*TODO: Should I have a SIGTERM handler in the child process?       */
-            kill(pid, SIGTERM);
-            goto err;
+            /*TODO: SIGTERM and SIGCHLD by default are ignored (interactive bash) */
+            /*if the child process launched the system command the child process will die */
+            /*and the system process is going to be an orphan process... :( */
+            if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
+                syslog (LOG_ERR, "error while killing child process: %m");
+                /*This is the worst that could happen, we are not sure if the child process is going to die         */
+                /*in this case, probably the child process is going to be an orphan and its system process ass welll*/
+                /*goto err?*/
+            }
+            /*TODO: sigprocmask(SIG_BLOCK, SIGCHLD, NULL) at the beginning of this whole program */
+            /*from bash it makes a clone and this parent process inherits the bash signal handlers */
+            /*but not its signal masks. we want to block until child process is dead */
+            /*because of that we must block SIGCHLD.*/
+            waitpid(pid, NULL, 0);
+            /*goto err?*/;
         }
 
         while(1) {
             if(poll(polls,2,100)) {
-                if(polls[0].revents&&POLLIN) {
+                if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
                     n=read(out[0],buf,1990);
                     sprintf(string,"<out><![CDATA[");
@@ -618,7 +644,7 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
                     send(socket,string,strlen(string),0);
                 }
  
-                if(polls[1].revents&&POLLIN) {
+                if(polls[1].revents && POLLIN) {
                     bzero(buf,2000);
                     n=read(err[0],buf,1990);
                     sprintf(string,"<error><![CDATA[");
@@ -628,11 +654,9 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
                     send(socket,string,strlen(string),0);
                 }
 
-                if(!polls[0].revents&&POLLIN && !polls[1].revents&&POLLIN) {
+                if(!(polls[0].revents && POLLIN) && !(polls[1].revents && POLLIN)) {
                     syslog (LOG_ERR, "parent error polling pipes: %m");
-                    /*TODO: May I kill a child process if it is already dead? I mean,   */
-                    /*      what could happen if the child process is dead?             */
-                    /*      Should I implement a SIGCHILD handler?                      */
+                    /*TODO: Should I implement a SIGCHILD handler?                      */
                     /*TODO: Should I have a SIGTERM handler in the child process?       */
                     kill(pid, SIGTERM);
                     /*I want to send an error status to the remote calling process                              */
