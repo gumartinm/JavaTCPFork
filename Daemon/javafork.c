@@ -1,3 +1,10 @@
+#define _GNU_SOURCE
+
+/* Beaware: this program uses GNU extensions (the TEMP_FAILURE_RETRY macro)
+ * I am writing (non-)portable code because I am running out of time
+ * TODO: my portable macro with the same funcionality
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -24,15 +31,10 @@
 #include "javafork.h"
 
 
-pid_t daemonPID;    /*Stores the daemon server PID*/
-int sockfd = -1;    /*Stores the daemon server TCP socket.*/
 
+pid_t daemonPID;        /*Stores the daemon server PID*/
+int sockfd = -1;        /*Stores the daemon server TCP socket.*/
 
-
-static int restartableClose(int fd) 
-{
-    return TEMP_FAILURE_RETRY(close(fd));
-}
 
 
 
@@ -40,7 +42,7 @@ static int closeSafely(int fd)
 {
     /*If we always initialize file descriptor variables with value -1*/
     /*this method should work like a charm*/
-    return (fd == -1) ? 0 : restartableClose(fd);
+    return (fd == -1) ? 0 : TEMP_FAILURE_RETRY(close(fd));
 }
 
 
@@ -52,6 +54,7 @@ int main (int argc, char *argv[])
 	char *avalue = IPADDRESS;   /*Address: numeric value or hostname*/
 	int pvalue = PORT;          /*TCP port*/
 	int qvalue = QUEUE;         /*TCP listen queue*/
+    struct sigaction sa;        /*sig actions values*/
 	
 	
 	/*This process is intended to be used as a daemon, it sould be launched by the INIT process, because of that*/
@@ -61,11 +64,7 @@ int main (int argc, char *argv[])
 
 	/*Changing session.*/	
 	setsid();
-	
-	if (signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
-		syslog (LOG_ERR, "signal SIGPIPE desactivation failed: %m");
-		return 1;
-	}
+
 	
 	opterr = 0;
 	while ((c = getopt (argc, argv, "a:p:q:")) != -1) {
@@ -102,12 +101,34 @@ int main (int argc, char *argv[])
 		return 1;
 	}
 	
-	/*INIT process sending SIGINT? Should I catch that signal?*/
-	daemonPID = getpid();
-	if (signal(SIGINT, sigint_handler) == SIG_ERR) {
-		syslog (LOG_ERR, "SIGTERM signal handler failed: %m");
-		return 1;
-	}
+
+    /* From man sigaction(2):                                                                                              
+     * A child created via fork(2) inherits a copy of its parent's signal dispositions.
+     * During an execve(2), the dispositions of handled signals are reset to the default; the
+     * dispositions of ignored signals are left unchanged.
+     * I want to ignore SIGCHLD without causing any issue to child processes.
+     */
+    memset (&sa, 0, sizeof(sa));
+    /*SIG_DFL: by default SIGCHLD is ignored.*/
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) < 0) {
+        syslog (LOG_ERR, "SIGCHLD signal handler failed: %m");
+        return 1;
+    }
+
+
+    /*INIT process sending SIGINT? Should I catch that signal?*/
+    daemonPID = getpid();
+    memset (&sa, 0, sizeof(sa));
+    sa.sa_handler = &sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        syslog (LOG_ERR, "SIGINT signal handler failed: %m");
+        return 1;
+    }
+
 	
 	if (main_daemon (avalue, pvalue, qvalue) < 0)
 		return 1;
@@ -168,7 +189,7 @@ int main_daemon (char *address, int port, int queue)
 		goto err;
 	}	
 	
-	while(1) {
+	for(;;) {
 		clilen =  sizeof(addr_client);
 		if ((sockclient = TEMP_FAILURE_RETRY(accept (sockfd, (struct sockaddr *) &addr_client, &clilen))) < 0) {
 			syslog (LOG_ERR, "socket accept failed: %m");
@@ -236,12 +257,13 @@ int daemonize(const char *pname, int facility, int option)
 
 void *serverThread (void * arg)
 {
-	int socket = -1;                    /*Open socket by the Java client*/
-	long timeout, utimeout;             /*Timeout for reading data from client: secs and usecs respectively*/
-	int len;                            /*Control parameter used while receiving data from the client*/
-	char buffer[1025];                  /*This buffer is intended to store the data received from the client*/
-	char *command = NULL;               /*The command sent by the client, to be executed by this process*/	
-	uint32_t *commandLength = NULL;     /*Store the command length*/
+	int socket = -1;                /*Open socket by the Java client*/
+	long timeout, utimeout;         /*Timeout for reading data from client: secs and usecs*/
+                                    /*respectively*/
+	int len;                        /*Control parameter used while receiving data from the client*/
+	char buffer[1025];              /*This buffer is intended to store the data received from the client*/
+	char *command = NULL;           /*The command sent by the client, to be executed by this process*/	
+	uint32_t *commandLength = NULL; /*Store the command length*/
 	
 	socket = (int) arg;
 	
@@ -350,10 +372,10 @@ int required_sock_options (int socket)
         return -1;
     }
 
-    /*TODO: keepalive is not enough to find out if the connection is broken                     */
-    /*      apparently it just works while the handshake phase. See:                            */
-    /*      http://stackoverflow.com/questions/4345415/socket-detect-connection-is-lost         */
-    /*      I have to implement an echo/ping messages protocol (application layer)              */
+    /*TODO: keepalive is not enough to find out if the connection is broken                 */
+    /*      apparently it just works while the handshake phase. See:                        */
+    /*      http://stackoverflow.com/questions/4345415/socket-detect-connection-is-lost     */
+    /*      I have to implement an echo/ping messages protocol (application layer)          */
 
     return 0;
 }
@@ -402,7 +424,8 @@ int readable (int socket, char *data, int len, int flags)
             syslog (LOG_INFO, "read TCP socket spurious readiness");
         }
     } else if (received == 0) {
-        /*if nData is 0, client closed connection but we wanted to receive more data, this is an error */
+        /*if nData is 0, client closed connection but we wanted to receive more data, */
+        /*this is an error */
         syslog (LOG_ERR, "expected more data, closed connection from client");
         return -1;
     }
@@ -432,6 +455,7 @@ int receive_from_socket (int socket, char *data, int len, long timeout, long uti
 }
 
 
+
 int pre_fork_system(int socket, char *command)
 {
     /*Required variables in order to share memory between processes*/
@@ -444,17 +468,20 @@ int pre_fork_system(int socket, char *command)
     /*Required variables in order to share the semaphore between processes*/
     key_t keysemaphore;
     int idsemaphore = -1;
-    sem_t *semaphore = NULL;    /*Used as a barrier: the child process just can start after sending the XML init code*/
-
-    int returnValue = -1;       /*Return value from this function can be caught by upper layers, NOK by default*/
+    sem_t *semaphore = NULL;    /*Used as a barrier: the child process just can start after */
+                                /*sending the XML init code*/
+    int returnValue = -1;       /*Return value from this function can be caught by upper*/
+                                /*layers, NOK by default*/
 		
 	
 	
-    /*Allocate shared memory because we can not use named semaphores*/
-    /*We are using this semaphore as a barrier, because we just want to start the child process when the parent process has sent*/
-    /*the XML header (see: fork_system function)*/
-	
-    keysemaphore=ftok("/bin/ls", SHAREMEMSEM);  /*the /bin/ls must exist otherwise this does not work... */
+    /* Allocate shared memory because we can not use named semaphores
+     * We are using this semaphore as a barrier, because we just want to start the child process 
+     * when the parent process has sent the XML header (see: fork_system function)
+	 */
+
+    /*the /bin/ls must exist otherwise this does not work... */
+    keysemaphore=ftok("/bin/ls", SHAREMEMSEM); 
     if (keysemaphore == -1) {
         syslog (LOG_ERR, "ftok failed: %m");
         goto end;
@@ -482,15 +509,20 @@ int pre_fork_system(int socket, char *command)
 	
 	
 	
-    /*Allocate shared memory for the return status code from the process which is going to be launched by the system function.*/
-    /*We want to share the returnstatus variable between this process and the child that is going to be created in the fork_system method.*/
-    /*The goal is to store in this variable the return status code received from the process launched with the system method by the child process,*/
-    /*then the parent process can retrieve that return status code and send it by TCP to the Java client.*/
-    /*There are not concurrency issues because the parent process will just try to read this variable when the child process is dead, taking*/
-    /*in that moment its last value and sending it to the Java client.*/
+    /* Allocate shared memory for the return status code from the process which is 
+     * going to be launched by the system function. We want to share the returnstatus 
+     * variable between this process and the child that is going to be created in the 
+     * fork_system method.
+     * The goal is to store in this variable the return status code received from the 
+     * process launched with the system method by the child process, then the parent 
+     * process can retrieve that return status code and send it by TCP to the Java client.
+     * There are not concurrency issues because the parent process will just try to read 
+     * this variable when the child process is dead, taking in that moment its last value 
+     * and sending it to the Java client.
+     */
 
-
-    keyvalue=ftok("/bin/ls", SHAREMEMKEY);  /*the /bin/ls must exist otherwise this does not work... */
+    /*the /bin/ls must exist otherwise this does not work... */
+    keyvalue=ftok("/bin/ls", SHAREMEMKEY); 
     if (keyvalue == -1) {
         syslog (LOG_ERR, "ftok failed: %m");
         goto end_destroy_sem;
@@ -545,16 +577,16 @@ end:
 
 int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus) 
 {
-    int pid;
-    int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout and stderr streams.*/
+    int pid;                /*Child or parent PID.*/
+    int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
+                            /*and stderr streams.*/
     char buf[2000];         /*Read data buffer.*/
-    char string[100];
-    /*We are going to use a poll in order to find out if there are data coming from the*/
-    /*pipes attached to the stdout and stderr streams.*/
-    struct pollfd polls[2];
-    int n;
+    char string[3000];
+    struct pollfd polls[2]; /*pipes attached to the stdout and stderr streams.*/
+    int n;                  /*characters number from stdout and stderr*/
     int childreturnstatus;
-    int returnValue = 0;    /*return value from this function can be caught by upper layers, OK by default*/
+    int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
+                            /*OK by default*/
 
 
     /*Value by default*/
@@ -564,7 +596,7 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
     out[0] = out[1] = err[0] = err[1]  = -1;
 
 
-    /*Creating the pipes, they will be attached to the stderr and stdout streams*/	
+    /*Creating pipes, they will be attached to the stderr and stdout streams*/	
     if (pipe(out) < 0 || pipe(err) < 0) {
         syslog (LOG_ERR, "pipe failed: %m");
         goto err;
@@ -590,7 +622,7 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
             exit(-1);
         }
 
-        /*TODO: I should use execve with setlocale instead of system.*/
+        /*TODO: I should use execve with setlocale and the environment instead of system.*/
         /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
         /* will be ignored. From man system(3)*/
         *returnstatus=system(command);
@@ -607,68 +639,99 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
         polls[0].fd=out[0];
         polls[1].fd=err[0];
         polls[0].events = polls[1].events = POLLIN;
-        sprintf(string,"<?xml version=\"1.0\"?>");
-        send(socket,string,strlen(string),0);
-        sprintf(string,"<streams>");
-        send(socket,string,strlen(string),0);
+
+        bzero(string, sizeof(string));
+        /*TODO: stop using XML. Next improvements: my own client/server protocol*/
+        sprintf(string,"<?xml version=\"1.0\"?><streams>");
+
+        if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0) {
+            syslog (LOG_INFO, "error while sending xml header: %m");
+            
+            if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
+                /*We are not sure if the child process will die. In this case, probably the child */
+                /*process is going to be an orphan and its system process (if there is one) as well*/
+                syslog (LOG_ERR, "error while killing child process: %m");
+                goto err;
+            }
+
+            if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
+                /*We are not sure if the child process is dead. In this case, probably the child */
+                /*process is going to be an orphan and its system process (if there is one) as well*/
+                syslog (LOG_ERR, "error while waiting for killed child process: %m");
+            }
+    
+            /*In Java the client will get a XMLParser Exception.*/
+            goto err;
+        }
 
         /*Releasing barrier, the child process can keep running*/
         if (sem_post(semaphore) < 0 ) {
-            syslog (LOG_ERR, "parent error releasing barrier: %m");
-            /*TODO: SIGTERM and SIGCHLD by default are ignored (interactive bash) */
             /*if the child process launched the system command the child process will die */
             /*and the system process is going to be an orphan process... :( */
+            syslog (LOG_ERR, "parent error releasing barrier: %m");
+
             if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
+                /*We are not sure if the child process will die. In this case, probably the child */
+                /*process is going to be an orphan and its system process (if there is one) as well*/
                 syslog (LOG_ERR, "error while killing child process: %m");
-                /*This is the worst that could happen, we are not sure if the child process is going to die         */
-                /*in this case, probably the child process is going to be an orphan and its system process ass welll*/
-                /*goto err?*/
+                goto err;
             }
-            /*TODO: sigprocmask(SIG_BLOCK, SIGCHLD, NULL) at the beginning of this whole program */
-            /*from bash it makes a clone and this parent process inherits the bash signal handlers */
-            /*but not its signal masks. we want to block until child process is dead */
-            /*because of that we must block SIGCHLD.*/
-            waitpid(pid, NULL, 0);
-            /*goto err?*/;
+
+            if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
+                /*We are not sure if the child process is dead. In this case, probably the child */
+                /*process is going to be an orphan and its system process (if there is one) as well*/
+                syslog (LOG_ERR, "error while waiting for killed child process: %m");
+            }
+
+            /*In Java the client will get a XMLParser Exception.*/
+            goto err;
         }
 
         while(1) {
             if(poll(polls,2,100)) {
                 if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
-                    n=read(out[0],buf,1990);
-                    sprintf(string,"<out><![CDATA[");
-                    send(socket,string,strlen(string),0);
-                    send(socket,buf,n,0);
-                    sprintf(string,"]]></out>");
-                    send(socket,string,strlen(string),0);
+                    bzero(string, sizeof(string));
+                    n=TEMP_FAILURE_RETRY(read(out[0],buf,1990));
+                    sprintf(string,"<out><![CDATA[%s]]></out>", buf);
+                    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
+                        syslog (LOG_INFO, "error while sending stdout: %m");
                 }
  
                 if(polls[1].revents && POLLIN) {
                     bzero(buf,2000);
-                    n=read(err[0],buf,1990);
-                    sprintf(string,"<error><![CDATA[");
-                    send(socket,string,strlen(string),0);
-                    send(socket,buf,n,0);
-                    sprintf(string,"]]></error>");
-                    send(socket,string,strlen(string),0);
+                    bzero(string, sizeof(string));
+                    n=TEMP_FAILURE_RETRY(read(err[0],buf,1990));
+                    sprintf(string,"<error><![CDATA[%s]]></error>", buf);
+                    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
+                        syslog (LOG_INFO, "error while sending stderr: %m");
                 }
 
                 if(!(polls[0].revents && POLLIN) && !(polls[1].revents && POLLIN)) {
                     syslog (LOG_ERR, "parent error polling pipes: %m");
-                    /*TODO: Should I implement a SIGCHILD handler?                      */
-                    /*TODO: Should I have a SIGTERM handler in the child process?       */
-                    kill(pid, SIGTERM);
-                    /*I want to send an error status to the remote calling process                              */
-                    /*TODO: Before giving this value I should make sure the child process is dead               */
-                    /*      otherwise I could finish having in *returnstatus the value from the child process   */
-                    (*returnstatus) = -1;
-                    break;
+
+                    if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
+                        /*We are not sure if the child process will die. In this case, */
+                        /*probably the child process is going to be an orphan and its */
+                        /*system process (if there is one) as well*/
+                        syslog (LOG_ERR, "error while killing child process: %m");
+                        goto err;
+                    }
+
+                    if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
+                        /*We are not sure if the child process is dead. In this case, */
+                        /*probably the child process is going to be an orphan and its */
+                        /*system process (if there is one) as well*/
+                        syslog (LOG_ERR, "error while waiting for killed child process: %m");
+                    }
+
+                    /*In Java the client will get a XMLParser Exception.*/
+                    goto err;
                 }
             }   
             else {
                 /*When timeout*/
-                if(waitpid(pid, &childreturnstatus, WNOHANG)) {
+                if(TEMP_FAILURE_RETRY(waitpid(pid, &childreturnstatus, WNOHANG))) {
                     /*Child is dead, we can finish the connection*/
                     /*First of all, we check the exit status of our child process*/
                     /*In case of error send an error status to the remote calling process*/
@@ -681,11 +744,10 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
         }
     }
     /*Reaching this code when child finished or if error while polling pipes*/
-    sprintf(string,"<ret><![CDATA[%d]]></ret>", (*returnstatus));
-    send(socket,string,strlen(string),0);
-    sprintf(string,"</streams>");
-    send(socket,string,strlen(string),0);
-
+    bzero(string, sizeof(string));
+    sprintf(string,"<ret><![CDATA[%d]]></ret></streams>", (*returnstatus));
+    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
+        syslog (LOG_INFO, "error while sending return status: %m");
     /*Stuff just done by the Parent process. The child process ends with exit*/
 
 end:
@@ -707,10 +769,8 @@ void sigint_handler(int sig)
         return;
     }
 
-    if (signal (SIGINT, SIG_IGN) == SIG_ERR)
-        syslog (LOG_ERR, "signal SIGINT desactivation failed: %m");
 
     closeSafely (sockfd);
-    /*TODO: kill child processes and release allocate memory*/
+    /*TODO: kill child processes, finish threads and release allocate memory*/
     exit (0);
 }

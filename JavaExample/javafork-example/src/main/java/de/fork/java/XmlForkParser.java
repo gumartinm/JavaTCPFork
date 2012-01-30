@@ -42,8 +42,10 @@ import org.xml.sax.ext.DefaultHandler2;
 public class XmlForkParser extends DefaultHandler2 {
 	private static final Logger logger = Logger.getLogger(XmlForkParser.class);
     private StringBuffer accumulator = new StringBuffer();
-	private String stderr = new String();
-	private String stdout = new String();
+	private StringBuilder stderr = new StringBuilder();
+	private String lastStderr;
+	private StringBuilder stdout = new StringBuilder();
+	private String lastStdout;
 	private String returnCode = new String();
 	final SAXParserFactory spf = SAXParserFactory.newInstance();
 	private final SAXParser saxParser;
@@ -70,10 +72,10 @@ public class XmlForkParser extends DefaultHandler2 {
 	public void endElement (final String uri, final String localName, final String qName) {
 		if (qName.equals("error")) {
 			// After </error>, we've got the stderror
-			stderr = stderr + accumulator.toString();
+			stderr = stderr.append(accumulator.toString());
 		} else if (qName.equals("out")) {
 			// After </out>, we've got the stdout
-			stdout = stdout + accumulator.toString();
+			stdout = stdout.append(accumulator.toString());
 		} else if (qName.equals("ret")) {
 			returnCode = returnCode + accumulator.toString();
 		}
@@ -91,20 +93,10 @@ public class XmlForkParser extends DefaultHandler2 {
 	public void endDocument () throws SAXException
 	{
 		if (stderr.length() != 0) {
-			String lastStderr = stderr.replaceFirst("\\\n$", "");
-			stderr = lastStderr;
-		}
-		else {
-			//if there is nothing from the stderr stream
-			stderr = null;
+			lastStderr = stderr.toString().replaceFirst("\\\n$", "");
 		}
 		if (stdout.length() != 0) {
-			String lastStdout = stdout.replaceFirst("\\\n$", "");
-			stdout = lastStdout;
-		}
-		else {
-			//if there is nothing from the stdout stream
-			stdout = null;
+			lastStdout = stdout.toString().replaceFirst("\\\n$", "");
 		}
 	}
 	
@@ -135,7 +127,7 @@ public class XmlForkParser extends DefaultHandler2 {
 	 * @return stderr
 	 */
 	public String getStderr() {
-		return stderr;
+		return lastStderr;
 		
 	}
 	
@@ -148,7 +140,7 @@ public class XmlForkParser extends DefaultHandler2 {
 	 * @return stdout
 	 */
 	public String getStdout() {
-		return stdout;
+		return lastStdout;
 	}
 	
 	

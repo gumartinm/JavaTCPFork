@@ -104,7 +104,8 @@ public class TCPForkDaemon {
 	/*                                                                                        */
 	/******************************************************************************************/
 
-
+		
+		//SocketChannel socketNIO = new SocketChannelImpl();
 		
 		socket = new Socket(InetAddress.getByName(host), port);
 		try {
@@ -139,7 +140,7 @@ public class TCPForkDaemon {
 			// the only way to fix this issue in Java is sending ping messages (Could we fix it using custom settings in the OS
 			// of the client and server machines? for example in Linux see /proc/sys/net/ipv4/)
 			InputSource inputSource = new InputSource(socket.getInputStream());
-			//Must be used the remote locale character set encoding?
+			//It must be used the remote locale character set encoding?
 			inputSource.setEncoding("UTF-8");
 			parser.setStream(socket.getInputStream());
 			
