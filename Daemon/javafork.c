@@ -102,7 +102,8 @@ int main (int argc, char *argv[])
 	}
 	
 
-    /* From man sigaction(2):                                                                                              
+    /*
+     * From man sigaction(2):
      * A child created via fork(2) inherits a copy of its parent's signal dispositions.
      * During an execve(2), the dispositions of handled signals are reset to the default; the
      * dispositions of ignored signals are left unchanged.
@@ -372,10 +373,12 @@ int required_sock_options (int socket)
         return -1;
     }
 
-    /*TODO: keepalive is not enough to find out if the connection is broken                 */
-    /*      apparently it just works while the handshake phase. See:                        */
-    /*      http://stackoverflow.com/questions/4345415/socket-detect-connection-is-lost     */
-    /*      I have to implement an echo/ping messages protocol (application layer)          */
+    /*
+     *TODO: keepalive is not enough to find out if the connection is broken
+     *      apparently it just works while the handshake phase. See:
+     *      http://stackoverflow.com/questions/4345415/socket-detect-connection-is-lost
+     *      I have to implement an echo/ping messages protocol (application layer)
+     */
 
     return 0;
 }
@@ -475,8 +478,9 @@ int pre_fork_system(int socket, char *command)
 		
 	
 	
-    /* Allocate shared memory because we can not use named semaphores
-     * We are using this semaphore as a barrier, because we just want to start the child process 
+    /*
+     * Allocate shared memory because we can not use named semaphores
+     * We are using this semaphore as a barrier, because we just want to start the child process
      * when the parent process has sent the XML header (see: fork_system function)
 	 */
 
@@ -509,7 +513,8 @@ int pre_fork_system(int socket, char *command)
 	
 	
 	
-    /* Allocate shared memory for the return status code from the process which is 
+    /*
+     * Allocate shared memory for the return status code from the process which is 
      * going to be launched by the system function. We want to share the returnstatus 
      * variable between this process and the child that is going to be created in the 
      * fork_system method.
@@ -687,7 +692,7 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
             goto err;
         }
 
-        while(1) {
+        for (;;) {
             if(poll(polls,2,100)) {
                 if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
