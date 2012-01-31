@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-/* Beaware: this program uses GNU extensions (the TEMP_FAILURE_RETRY macro)
+/* Be aware: this program uses GNU extensions (the TEMP_FAILURE_RETRY macro)
  * I am writing (non-)portable code because I am running out of time
  * TODO: my portable macro with the same funcionality
  */
