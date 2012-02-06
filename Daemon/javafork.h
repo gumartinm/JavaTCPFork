@@ -9,6 +9,13 @@
 
 
 
+struct data{
+    unsigned short type;    /*Data alignment: 2-byte aligned*/
+    unsigned short length;  /*Data alignment: 2-byte aligned*/
+    char datum[2000];       /*Data alignment: 1-byte aligned*/
+};
+/*2004 is multiple of 2. I guess there is not padding...*/
+
 
 /****************************************************************************************/
 /* This method is used by pthread_create                                                */

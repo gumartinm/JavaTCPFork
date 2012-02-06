@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
-/* Be aware: this program uses GNU extensions (the TEMP_FAILURE_RETRY macro)
+/*
+ * Be aware: this program uses GNU extensions (the TEMP_FAILURE_RETRY macro)
  * I am writing (non-)portable code because I am running out of time
  * TODO: my portable macro with the same funcionality
  */
@@ -261,10 +262,9 @@ void *serverThread (void * arg)
 	int socket = -1;                /*Open socket by the Java client*/
 	long timeout, utimeout;         /*Timeout for reading data from client: secs and usecs*/
                                     /*respectively*/
-	int len;                        /*Control parameter used while receiving data from the client*/
-	char buffer[1025];              /*This buffer is intended to store the data received from the client*/
+	char buffer[sizeof(uint32_t)];  /*This buffer is intended to store the data received from the client*/
 	char *command = NULL;           /*The command sent by the client, to be executed by this process*/	
-	uint32_t *commandLength = NULL; /*Store the command length*/
+	uint32_t commandLength = 0;     /*Store the command length*/
 	
 	socket = (int) arg;
 	
@@ -294,35 +294,29 @@ void *serverThread (void * arg)
 
 
     /*1. COMMAND LENGTH*/
-    /*First of all we receive the command size as a Java integer (4 bytes primitive type)*/	
-    if ((commandLength = (uint32_t *) malloc(sizeof(uint32_t))) == NULL) {
-        syslog (LOG_ERR, "commandLength malloc failed: %m");
-        goto err;
-    }
-
+    /*First of all we receive the command size as a Java integer (4 bytes primitive type)*/
     bzero(buffer, sizeof(buffer));
-    len = sizeof(uint32_t);
 
-    if (receive_from_socket (socket, buffer, len, timeout, utimeout) < 0)
+    if (receive_from_socket (socket, buffer, sizeof(uint32_t), timeout, utimeout) < 0)
         goto err;
 
     /*Retrieve integer (4 bytes) from buffer*/
-    memcpy (commandLength, buffer, sizeof(uint32_t));
+    memcpy (&commandLength, buffer, sizeof(uint32_t));
     /*Java sends the primitive integer using big-endian order (it is the same as network order)*/
-    *commandLength = be32toh (*commandLength);
+    commandLength = be32toh (commandLength);
 
 
     /*2. COMMAND*/
     /*Reserving commandLength + 1 because of the string end character*/
-    if ((command = (char *) malloc(*commandLength + 1)) == NULL) {
+    if ((command = (char *) malloc(commandLength + 1)) == NULL) {
         syslog (LOG_ERR, "command malloc failed: %m");
         goto err;
     }
 
-    bzero(command, ((*commandLength) + 1));
-    len = *commandLength;
+    bzero(command, ((commandLength) + 1));
+
     /*Wait max 2 seconds for data coming from client, otherwise exits with error.*/
-    if (receive_from_socket (socket, command, len, timeout, utimeout) < 0)
+    if (receive_from_socket (socket, command, commandLength, timeout, utimeout) < 0)
         goto err;
 
 
@@ -335,7 +329,6 @@ void *serverThread (void * arg)
 err:
     free(command);
     closeSafely(socket);
-    free(commandLength);
 
     pthread_exit(0);
 }
