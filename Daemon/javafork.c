@@ -56,9 +56,8 @@ int main (int argc, char *argv[])
 	int pvalue = PORT;          /*TCP port*/
 	int qvalue = QUEUE;         /*TCP listen queue*/
     struct sigaction sa;        /*sig actions values*/
-	
-	
-	/*This process is intended to be used as a daemon, it sould be launched by the INIT process, because of that*/
+
+    /*This process is intended to be used as a daemon, it sould be launched by the INIT process, because of that*/
 	/*we are not forking it (INIT needs it)*/
 	if (daemonize(argv[0], LOG_SYSLOG, LOG_PID) < 0)
 		return 1;
@@ -262,9 +261,9 @@ void *serverThread (void * arg)
 	int socket = -1;                /*Open socket by the Java client*/
 	long timeout, utimeout;         /*Timeout for reading data from client: secs and usecs*/
                                     /*respectively*/
+    uint32_t commandLength = 0;     /*Store the command length*/
+    char *command = NULL;           /*The command sent by the client, to be executed by this process*/
 	char buffer[sizeof(uint32_t)];  /*This buffer is intended to store the data received from the client*/
-	char *command = NULL;           /*The command sent by the client, to be executed by this process*/	
-	uint32_t commandLength = 0;     /*Store the command length*/
 	
 	socket = (int) arg;
 	
@@ -280,11 +279,11 @@ void *serverThread (void * arg)
             /*   COMMAND_LENGTH: Java integer 4 bytes, BIG-ENDIAN (the same as network order)       */
             /*   COMMAND: locale character set encoding                                             */
             /*   RESULTS: locale character set encoding                                             */
-            /*                                                                                      */											        
-            /*   JAVA CLIENT: ------------ COMMAND_LENGTH -------> :SERVER                          */
-            /*   JAVA CLIENT: -------------- COMMAND ------------> :SERVER                          */
-            /*   JAVA CLIENT: <-------------- RESULTS ------------ :SERVER                          */
-            /*   JAVA CLIENT: <---------- CLOSE CONNECTION ------- :SERVER                          */
+            /*                                                                                      */
+            /*          JAVA CLIENT: ------------ COMMAND_LENGTH -------> :SERVER                   */
+            /*          JAVA CLIENT: -------------- COMMAND ------------> :SERVER                   */
+            /*          JAVA CLIENT: <-------------- RESULTS ------------ :SERVER                   */
+            /*          JAVA CLIENT: <---------- CLOSE CONNECTION ------- :SERVER                   */
             /*                                                                                      */
             /****************************************************************************************/
 
@@ -420,7 +419,7 @@ int readable (int socket, char *data, int len, int flags)
             syslog (LOG_INFO, "read TCP socket spurious readiness");
         }
     } else if (received == 0) {
-        /*if nData is 0, client closed connection but we wanted to receive more data, */
+        /*if received is 0, client closed connection but we wanted to receive more data, */
         /*this is an error */
         syslog (LOG_ERR, "expected more data, closed connection from client");
         return -1;
@@ -461,51 +460,9 @@ int pre_fork_system(int socket, char *command)
     /*Using shared memory between the child and parent process*/
     int *returnstatus = NULL;
 	
-    /*Required variables in order to share the semaphore between processes*/
-    key_t keysemaphore;
-    int idsemaphore = -1;
-    sem_t *semaphore = NULL;    /*Used as a barrier: the child process just can start after */
-                                /*sending the XML init code*/
     int returnValue = -1;       /*Return value from this function can be caught by upper*/
                                 /*layers, NOK by default*/
 		
-	
-	
-    /*
-     * Allocate shared memory because we can not use named semaphores
-     * We are using this semaphore as a barrier, because we just want to start the child process
-     * when the parent process has sent the XML header (see: fork_system function)
-	 */
-
-    /*the /bin/ls must exist otherwise this does not work... */
-    keysemaphore=ftok("/bin/ls", SHAREMEMSEM); 
-    if (keysemaphore == -1) {
-        syslog (LOG_ERR, "ftok failed: %m");
-        goto end;
-    }
-
-    /*Attach shared memory*/
-    if ((idsemaphore = shmget(keysemaphore,sizeof(sem_t), 0660 | IPC_CREAT)) < 0) {
-        syslog (LOG_ERR, "semaphore initialization failed: %m");
-        goto end_release_sem;
-    }
-
-    if ((semaphore = (sem_t *)shmat(idsemaphore, (void *)0, 0)) < 0) {
-        goto end_release_sem;
-    }
-
-    if (sem_init(semaphore, 1, 1) < 0) {
-        syslog (LOG_ERR, "semaphore initialization failed: %m");
-        goto end_destroy_sem;
-    }
-
-    if (TEMP_FAILURE_RETRY(sem_wait(semaphore)) < 0) {
-        syslog (LOG_ERR, "semaphore wait failed: %m");
-        goto end_destroy_sem;
-    }
-	
-	
-	
     /*
      * Allocate shared memory for the return status code from the process which is 
      * going to be launched by the system function. We want to share the returnstatus 
@@ -523,7 +480,7 @@ int pre_fork_system(int socket, char *command)
     keyvalue=ftok("/bin/ls", SHAREMEMKEY); 
     if (keyvalue == -1) {
         syslog (LOG_ERR, "ftok failed: %m");
-        goto end_destroy_sem;
+        goto end;
     }
 
     /*Attach shared memory*/
@@ -540,7 +497,7 @@ int pre_fork_system(int socket, char *command)
 
     /*After allocating and attaching shared memory we reach this code if everything went OK.*/
 
-    returnValue = fork_system(socket, command, semaphore, returnstatus);
+    returnValue = fork_system(socket, command, returnstatus);
 
 
 end_release_mem:
@@ -553,35 +510,22 @@ end_release_mem:
     /*Mark the segment to be destroyed.*/
     if (shmctl (idreturnstatus, IPC_RMID, (struct shmid_ds *)NULL) < 0 )
         syslog (LOG_ERR, "returnstatus shared variable shmctl failed: %m");
-end_destroy_sem:
-    if (sem_destroy(semaphore) <0)
-         syslog (LOG_ERR, "semaphore destroy failed: %m");
-end_release_sem:
-    /*after sem_destroy-> input/output parameter NULL?*/
-    if (semaphore != NULL) {
-        /*detach memory*/
-        if (shmdt ((sem_t *)semaphore) < 0)
-            syslog (LOG_ERR, "semaphore shmdt failed: %m");
-    }
-
-    /*Mark the segment to be destroyed.*/
-    if (shmctl (idsemaphore, IPC_RMID, (struct shmid_ds *)NULL) < 0 )
-        syslog (LOG_ERR, "semaphore shmctl failed: %m");
 end:
     return returnValue;
 }
 
 
 
-int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus) 
+int fork_system(int socket, char *command, int *returnstatus) 
 {
     int pid;                /*Child or parent PID.*/
     int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
                             /*and stderr streams.*/
-    char buf[2000];         /*Read data buffer.*/
+    char buf[2000];         /*Read data buffer. allignment(int) * 500.*/
     char string[3000];
     struct pollfd polls[2]; /*pipes attached to the stdout and stderr streams.*/
     int n;                  /*characters number from stdout and stderr*/
+    struct tcpforkhdr header;
     int childreturnstatus;
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
@@ -608,17 +552,12 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
     if (pid == 0) {
         /*Child process*/
         /*It has to launch another one using system or execve*/
-        if ((TEMP_FAILURE_RETRY(dup2(out[1],1)) < 0) || (TEMP_FAILURE_RETRY(dup2(err[1],2)) < 0)) {	
+        if ((TEMP_FAILURE_RETRY(dup2(out[1], 1)) < 0) || (TEMP_FAILURE_RETRY(dup2(err[1], 2)) < 0)) {	
             syslog (LOG_ERR, "child dup2 failed: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/	
             exit(-1);
         }
 
-        if (TEMP_FAILURE_RETRY(sem_wait(semaphore)) < 0) {
-            syslog (LOG_ERR, "child semaphore wait failed: %m");
-            /*Going to zombie state, hopefully waitpid will catch it*/
-            exit(-1);
-        }
 
         /*TODO: I should use execve with setlocale and the environment instead of system.*/
         /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
@@ -642,55 +581,26 @@ int fork_system(int socket, char *command, sem_t *semaphore, int *returnstatus)
         /*TODO: stop using XML. Next improvements: my own client/server protocol*/
         sprintf(string,"<?xml version=\"1.0\"?><streams>");
 
-        if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0) {
+        if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
             syslog (LOG_INFO, "error while sending xml header: %m");
-            
-            if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
-                /*We are not sure if the child process will die. In this case, probably the child */
-                /*process is going to be an orphan and its system process (if there is one) as well*/
-                syslog (LOG_ERR, "error while killing child process: %m");
-                goto err;
-            }
 
-            if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
-                /*We are not sure if the child process is dead. In this case, probably the child */
-                /*process is going to be an orphan and its system process (if there is one) as well*/
-                syslog (LOG_ERR, "error while waiting for killed child process: %m");
-            }
-    
-            /*In Java the client will get a XMLParser Exception.*/
-            goto err;
-        }
-
-        /*Releasing barrier, the child process can keep running*/
-        if (sem_post(semaphore) < 0 ) {
-            /*if the child process launched the system command the child process will die */
-            /*and the system process is going to be an orphan process... :( */
-            syslog (LOG_ERR, "parent error releasing barrier: %m");
-
-            if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
-                /*We are not sure if the child process will die. In this case, probably the child */
-                /*process is going to be an orphan and its system process (if there is one) as well*/
-                syslog (LOG_ERR, "error while killing child process: %m");
-                goto err;
-            }
-
-            if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
-                /*We are not sure if the child process is dead. In this case, probably the child */
-                /*process is going to be an orphan and its system process (if there is one) as well*/
-                syslog (LOG_ERR, "error while waiting for killed child process: %m");
-            }
-
-            /*In Java the client will get a XMLParser Exception.*/
-            goto err;
-        }
 
         for (;;) {
-            if(poll(polls,2,100)) {
+            if(poll(polls, 2, 100)) {
                 if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
                     bzero(string, sizeof(string));
-                    n=TEMP_FAILURE_RETRY(read(out[0],buf,1990));
+                    n=TEMP_FAILURE_RETRY(read(out[0], &buf[1], 1999));
+                    bzero(&header, sizeof(header));
+                    //To network order, indeed it is the order used by Java (BIG ENDIAN). Anyway I am 
+                    //swapping the bytes because it is required if you want to write portable code and 
+                    //ENDIANNESS indepedent.
+                    header.type = htonl(1);
+                    header.type = htonl(n);
+                    //I do not care about the ENDIANNESS and character set in the payload, I send bytes
+                    //and the client application must know what it has to do with them. 
+                    //TODO: my own protocol to make the client independent of the ENDIANNESS and character set used
+                    //by the machine running this server. See comments in the TCPForkDaemon.java code about this.
                     sprintf(string,"<out><![CDATA[%s]]></out>", buf);
                     if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
                         syslog (LOG_INFO, "error while sending stdout: %m");

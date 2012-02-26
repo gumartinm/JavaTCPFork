@@ -9,12 +9,15 @@
 
 
 
-struct data{
-    unsigned short type;    /*Data alignment: 2-byte aligned*/
-    unsigned short length;  /*Data alignment: 2-byte aligned*/
-    char datum[2000];       /*Data alignment: 1-byte aligned*/
+struct tcpforkhdr{
+    //In this way, there are not issues related to ENDIANNESS or padding
+    //but we are wasting bytes for the type field...
+    uint32_t type;    /*Data alignment: 4-byte aligned*/
+    uint32_t length;  /*Data alignment: 4-byte aligned*/
+
+    //We use fixed width integer types from C99.
 };
-/*2004 is multiple of 2. I guess there is not padding...*/
+
 
 
 /****************************************************************************************/
@@ -55,7 +58,7 @@ int main_daemon (char *address, int port, int queue);
 /* INPUT PARAMETER: socket file descriptor                                              */
 /* RETURNS: void                                                                        */
 /****************************************************************************************/
-int fork_system(int socket, char *command, sem_t *semaphore, int *returnst);
+int fork_system(int socket, char *command, int *returnst);
 
 
 
