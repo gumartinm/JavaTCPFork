@@ -597,6 +597,16 @@ int fork_system(int socket, char *command, int *returnstatus)
                     //ENDIANNESS indepedent.
                     header.type = htonl(1);
                     header.type = htonl(n);
+                    //PACKING THE STRUCT OR SERIALIZING? 
+                    //serializing-> sends the struct one data member at time (using for example writev?) I send
+                    //one field of my struct at time.
+                    //packing-> Compilers often do some amount of padding and alignment, so unless you define 
+                    //alignment explicitly (maybe using a #pragma pack()), that size may be different. 
+
+                    //I think I do not need any of both, because my struct has no padding and it has a defined size
+                    //are you sure ur struct is never going to have padding? if it is unaligned? could my struct be unaligned?
+                    //does the compiler guarantee alignment?
+
                     //I do not care about the ENDIANNESS and character set in the payload, I send bytes
                     //and the client application must know what it has to do with them. 
                     //TODO: my own protocol to make the client independent of the ENDIANNESS and character set used
