@@ -22,7 +22,7 @@ public class RemoteForkMain  {
 		
 		final ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		final PrintStream stdout = new PrintStream(baos);
-		final String command = "ls -lah ~/Desktop; ls -lah * bbbb aaa";
+		final String command = "sleep 10; ls -lah";
 		final ByteArrayOutputStream baos2 = new ByteArrayOutputStream();
 		final PrintStream stderr = new PrintStream(baos2);
 		int result;

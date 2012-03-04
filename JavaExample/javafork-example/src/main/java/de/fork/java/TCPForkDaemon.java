@@ -1,15 +1,16 @@
 package de.fork.java;
 
-import java.io.DataOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import org.xml.sax.InputSource;
-import org.xml.sax.SAXException;
+
 
 /**
+ * TODO: JAVA NIO (for example ByteBuffer, Socket and Selects)
  * <p>
  * With this class we can run processes using the intended daemon which is 
  * waiting for TCP connections in a specified port.
@@ -36,9 +37,12 @@ import org.xml.sax.SAXException;
  * </p>
  */
 public class TCPForkDaemon {
-	private final XmlForkParser parser;
 	private final String host;
 	private final int port;
+	private String streamStdout;
+	private String streamStderr;
+	//Error by default.
+	private int results = -1;
 	
 	
 	/**
@@ -55,15 +59,11 @@ public class TCPForkDaemon {
      * supported. See <a href="Inet6Address.html#scoped">here</a> for a description of IPv6
      * scoped addresses.
 	 * </p>
-	 * @param parser instance implemeting {@link XmlForkParser} which knows about what 
-	 * codification uses the daemon to send us the results of the command sent to
-	 * by the remote daemon by the {@link TCPForkDaemon.#exec(String)} method.
 	 * @param host the specified host.
 	 * @param port the TCP port where the daemon accepts connections.
 	 * 
 	 */
-	public TCPForkDaemon (final XmlForkParser parser, final String host, final int port) {
-		this.parser = parser;
+	public TCPForkDaemon (final String host, final int port) {
 		this.host = host;
 		this.port = port;
 	}
@@ -84,12 +84,14 @@ public class TCPForkDaemon {
 	 * @return the executed command's return code.
 	 * @throws IOException 
 	 * @throws UnknownHostException
-	 * @throws SAXException 
 	 * @throws SecurityException if a security manager exists
 	 */
-	public int exec(final String command) throws UnknownHostException, IOException, SAXException {
-		PrintWriter out = null;
+	public int exec(final String command) throws UnknownHostException, IOException {
 		Socket socket = null;
+		ByteArrayOutputStream lengthAndCommand = null;
+		DataInputStream receiveData = null;
+		ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+		ByteArrayOutputStream stderr = new ByteArrayOutputStream();
 		
 	/******************************************************************************************/
 	/*          Just over 1 TCP connection                                                    */
@@ -103,9 +105,6 @@ public class TCPForkDaemon {
 	/*              JAVA CLIENT: <---------- CLOSE CONNECTION ------- :SERVER                 */
 	/*                                                                                        */
 	/******************************************************************************************/
-
-		
-		//SocketChannel socketNIO = new SocketChannelImpl();
 		
 		socket = new Socket(InetAddress.getByName(host), port);
 		try {
@@ -133,17 +132,21 @@ public class TCPForkDaemon {
 			//In this way we do not need to know about the remote encoding and everything could run automatically.
 			byte [] commandEncoded = command.getBytes("UTF-8"); 
 			
-			DataOutputStream sendData = new DataOutputStream(socket.getOutputStream());
 						
 			// 1. COMMAND_LENGTH
-			// This method sends the data like bytes using 4 system calls!!! Welcome to Java World...
-			sendData.writeInt(commandEncoded.length);
+			lengthAndCommand = new ByteArrayOutputStream (commandEncoded.length + 4);
+			int v = commandEncoded.length;
+			lengthAndCommand.write((v >>> 24) & 0xFF);
+			lengthAndCommand.write((v >>> 16) & 0xFF);
+			lengthAndCommand.write((v >>>  8) & 0xFF);
+			lengthAndCommand.write((v >>>  0) & 0xFF);
 				
 			// 2. COMMAND
-			sendData.write(commandEncoded);
+			lengthAndCommand.write(commandEncoded);
 			
-			//DataInputStream receiveData = new DataInputStream(socket.getInputStream());
-			//receiveData.read
+			// Sending length and command in the same chunk.
+			lengthAndCommand.writeTo(socket.getOutputStream());
+			
 			
 			// 3. RESULTS
 			// TODO: When the network infrastructure (between client and server) fails in this point 
@@ -152,28 +155,68 @@ public class TCPForkDaemon {
 			// Impossible to use a timeout, because we do not know how much time is going to long the command :/
 			// the only way to fix this issue in Java is sending ping messages (Could we fix it using custom settings in the OS
 			// of the client and server machines? for example in Linux see /proc/sys/net/ipv4/)
-			InputSource inputSource = new InputSource(socket.getInputStream());
 			//It must be used the remote locale character set encoding. If using for example multi-byte system (like UTF-16) 
 			//you must know about the ENDIANNESS for the remote machine.
 			//TODO: my own protocol:
 			//C server knows about its ENDIANNESS and character set so it can encode to TCPForkDaemon encode (which could be UTF-8) -> 
 			//sends response to Java client and here we know the character set encoding is the defined for TCPForkDaemon protocol 
-			//(for example UTF-8) In this way we do not need to know about the remote encoding and everything could run automatically. 
-			inputSource.setEncoding("UTF-8");
-			parser.setStream(socket.getInputStream());
-			
+			//(for example UTF-8) In this way we do not need to know about the remote encoding and everything could run automatically. 		
+			receiveData = new DataInputStream(socket.getInputStream());
+			while (true) {
+				int type = receiveData.readInt();
+				int length = receiveData.readInt();
+				switch (type) {
+				case 0:
+					//STDIN not implemented
+					break;
+				case 1:
+					//STDOUT
+					byte [] dataStdout = new byte[length];
+					receiveData.readFully(dataStdout, 0, length);
+					stdout.write(dataStdout, 0, length);
+					break;
+				case 2:
+					//STDERR
+					byte [] dataStderr = new byte[length];
+					receiveData.readFully(dataStderr, 0, length);
+					stderr.write(dataStderr, 0, length);
+					break;
+				case 3:
+					//RESULTS
+					results = length;
+					break;
+				default:
+					throw new IOException("Unrecognized type.");
+						
+				}
+			}	
+		} catch (EOFException e) {
 			// 4. SERVER CLOSED CONNECTION
+			//TODO: Java NIO with select, and stop using this crappy code.
 		}
 		finally {
-			if (out != null) {
-				out.close();
+			if (lengthAndCommand != null) {
+				lengthAndCommand.close();
 			}
-			socket.close();
+			if (receiveData != null) {
+				//Closes input stream and (of course) the socket
+				receiveData.close();
+			}
+			if (!socket.isClosed()) {
+				//In case of not closing the socket with receiveData.
+				socket.close();
+			}
+			
+			//The remote charset. 
+			//TODO: my own protocol as above specified.
+			this.streamStderr = new String(stderr.toByteArray(), "UTF-8");
+			this.streamStdout = new String(stdout.toByteArray(), "UTF-8");
 		}
 		
-		//If everything went alright we should be able to retrieve the return 
+		//If everything went all right we should be able to retrieve the return 
 		//status of the remotely executed command.
-		return parser.getReturnValue();
+		return this.results;
+		
 	}
 
 	
@@ -185,7 +228,7 @@ public class TCPForkDaemon {
 	 * @return the stdout stream
 	 */
 	public String getStdout() {
-		return parser.getStdout();
+		return this.streamStdout;
 	}
 	
 	
@@ -197,6 +240,6 @@ public class TCPForkDaemon {
 	 * @return the stderr stream
 	 */
 	public String getStderr() {
-		return parser.getStderr();
+		return this.streamStderr;
 	}
 }

@@ -19,7 +19,6 @@
 #include <arpa/inet.h>
 #include <strings.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
@@ -462,6 +461,9 @@ int pre_fork_system(int socket, char *command)
 	
     int returnValue = -1;       /*Return value from this function can be caught by upper*/
                                 /*layers, NOK by default*/
+
+    // TODO: stop using shared memory. There must be another way to do this. 
+    // See OpenJDK Fork Process, it uses a file descriptor.
 		
     /*
      * Allocate shared memory for the return status code from the process which is 
@@ -521,11 +523,10 @@ int fork_system(int socket, char *command, int *returnstatus)
     int pid;                /*Child or parent PID.*/
     int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
                             /*and stderr streams.*/
-    char buf[2000];         /*Read data buffer. allignment(int) * 500.*/
-    char string[3000];
+    u_char buf[2000];       /*Read data buffer. allignment(int) * 500.*/
     struct pollfd polls[2]; /*pipes attached to the stdout and stderr streams.*/
     int n;                  /*characters number from stdout and stderr*/
-    struct tcpforkhdr header;
+    struct tcpforkhdr *header = (struct tcpforkhdr *)buf;
     int childreturnstatus;
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
@@ -577,26 +578,16 @@ int fork_system(int socket, char *command, int *returnstatus)
         polls[1].fd=err[0];
         polls[0].events = polls[1].events = POLLIN;
 
-        bzero(string, sizeof(string));
-        /*TODO: stop using XML. Next improvements: my own client/server protocol*/
-        sprintf(string,"<?xml version=\"1.0\"?><streams>");
-
-        if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
-            syslog (LOG_INFO, "error while sending xml header: %m");
-
-
         for (;;) {
             if(poll(polls, 2, 100)) {
                 if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
-                    bzero(string, sizeof(string));
-                    n=TEMP_FAILURE_RETRY(read(out[0], &buf[1], 1999));
-                    bzero(&header, sizeof(header));
+                    n=TEMP_FAILURE_RETRY(read(out[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
                     //To network order, indeed it is the order used by Java (BIG ENDIAN). Anyway I am 
                     //swapping the bytes because it is required if you want to write portable code and 
                     //ENDIANNESS indepedent.
-                    header.type = htonl(1);
-                    header.type = htonl(n);
+                    header->type = htonl(1);
+                    header->length = htonl(n);
                     //PACKING THE STRUCT OR SERIALIZING? 
                     //serializing-> sends the struct one data member at time (using for example writev?) I send
                     //one field of my struct at time.
@@ -611,18 +602,17 @@ int fork_system(int socket, char *command, int *returnstatus)
                     //and the client application must know what it has to do with them. 
                     //TODO: my own protocol to make the client independent of the ENDIANNESS and character set used
                     //by the machine running this server. See comments in the TCPForkDaemon.java code about this.
-                    sprintf(string,"<out><![CDATA[%s]]></out>", buf);
-                    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
+                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), 0)) < 0)
                         syslog (LOG_INFO, "error while sending stdout: %m");
                 }
  
                 if(polls[1].revents && POLLIN) {
                     bzero(buf,2000);
-                    bzero(string, sizeof(string));
-                    n=TEMP_FAILURE_RETRY(read(err[0],buf,1990));
-                    sprintf(string,"<error><![CDATA[%s]]></error>", buf);
-                    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
-                        syslog (LOG_INFO, "error while sending stderr: %m");
+                    n=TEMP_FAILURE_RETRY(read(err[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
+                    header->type = htonl(2);
+                    header->length = htonl(n);
+                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), 0)) < 0)
+                        syslog (LOG_INFO, "error while sending stdout: %m");
                 }
 
                 if(!(polls[0].revents && POLLIN) && !(polls[1].revents && POLLIN)) {
@@ -643,13 +633,14 @@ int fork_system(int socket, char *command, int *returnstatus)
                         syslog (LOG_ERR, "error while waiting for killed child process: %m");
                     }
 
-                    /*In Java the client will get a XMLParser Exception.*/
+                    /*In the Java code, the client will get an error as the return status from the exec method.*/
                     goto err;
                 }
             }   
             else {
                 /*When timeout*/
                 if(TEMP_FAILURE_RETRY(waitpid(pid, &childreturnstatus, WNOHANG))) {
+                    //TODO: treating errors in waitpid function
                     /*Child is dead, we can finish the connection*/
                     /*First of all, we check the exit status of our child process*/
                     /*In case of error send an error status to the remote calling process*/
@@ -661,12 +652,13 @@ int fork_system(int socket, char *command, int *returnstatus)
             }
         }
     }
-    /*Reaching this code when child finished or if error while polling pipes*/
-    bzero(string, sizeof(string));
-    sprintf(string,"<ret><![CDATA[%d]]></ret></streams>", (*returnstatus));
-    if (TEMP_FAILURE_RETRY(send(socket,string,strlen(string),0)) < 0)
+    /*Stuff just done by the parent process. The child process ends with exit*/
+    /*Reaching this code when child ends*/
+    bzero(buf,2000);
+    header->type = htonl(3);
+    header->length = htonl((*returnstatus));
+    if (TEMP_FAILURE_RETRY(send(socket, buf, sizeof(struct tcpforkhdr), 0)) < 0)
         syslog (LOG_INFO, "error while sending return status: %m");
-    /*Stuff just done by the Parent process. The child process ends with exit*/
 
 end:
     closeSafely (out[0]);

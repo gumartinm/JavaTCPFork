@@ -12,8 +12,8 @@
 struct tcpforkhdr{
     //In this way, there are not issues related to ENDIANNESS or padding
     //but we are wasting bytes for the type field...
-    uint32_t type;    /*Data alignment: 4-byte aligned*/
-    uint32_t length;  /*Data alignment: 4-byte aligned*/
+    uint32_t type;    /*Data alignment: 4-byte aligned. For Java, we must send the integer using BIG ENDIAN*/
+    uint32_t length;  /*Data alignment: 4-byte aligned. For Java, we must send the integer using BIG ENDIAN*/
 
     //We use fixed width integer types from C99.
 };

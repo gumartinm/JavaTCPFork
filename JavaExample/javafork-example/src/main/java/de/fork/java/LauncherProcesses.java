@@ -5,9 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.UnknownHostException;
-import javax.xml.parsers.ParserConfigurationException;
 import org.apache.log4j.Logger;
-import org.xml.sax.SAXException;
 
 /**
  * 
@@ -25,7 +23,7 @@ public class LauncherProcesses {
 	 * 
 	 * @return return code.
 	 */
-	public static int exec(final String command) throws IOException, InterruptedException {
+	public static int exec(final String command) throws IOException {
 
 		return exec(command, null, null);
 	}
@@ -38,7 +36,7 @@ public class LauncherProcesses {
 	 *            
 	 * @return return code.            
 	 */
-	public static int exec(final String command, final PrintStream standarOutPut) throws IOException, InterruptedException {
+	public static int exec(final String command, final PrintStream standarOutPut) throws IOException {
 
 		return exec(command, standarOutPut, null);
 	}
@@ -53,7 +51,7 @@ public class LauncherProcesses {
 	 * 
 	 * @return return code from the executed system command.     
 	 */
-	public static int exec(final String command, final PrintStream standarOutPut, final PrintStream errorOutPut) throws IOException, InterruptedException {
+	public static int exec(final String command, final PrintStream standarOutPut, final PrintStream errorOutPut) throws IOException {
 
 		return exec(command, standarOutPut, errorOutPut, DEFAULT_HOST, DEFAULT_PORT);
 	}
@@ -64,7 +62,7 @@ public class LauncherProcesses {
 	 * @param command system command to be executed.
 	 * @param aLogger send the information to log.
 	 */
-	public static int exec(final String command, final Logger aLogger) throws IOException, InterruptedException {
+	public static int exec(final String command, final Logger aLogger) throws IOException {
 
 		//calling private method to handle logger input/ouput in a common method
 		return execHandlingLogger(command, aLogger, DEFAULT_HOST, DEFAULT_PORT);
@@ -88,7 +86,7 @@ public class LauncherProcesses {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	public static int exec(final String[] commandAndArguments, final Logger aLogger) throws IOException, InterruptedException {
+	public static int exec(final String[] commandAndArguments, final Logger aLogger) throws IOException {
 		String wholeCommand="";
 		
 		for(String argument : commandAndArguments) {
@@ -127,28 +125,13 @@ public class LauncherProcesses {
 	 * @throws IOException
 	 */
 	public static int exec(final String command, final PrintStream standarOutPut, 
-			final PrintStream errorOutPut, final String host, final int port) 
-											throws IOException, InterruptedException {
+			final PrintStream errorOutPut, final String host, final int port) throws IOException {
 		int exitStatus = LauncherProcesses.STATUS_ERR;
-		XmlForkParser forkParser = null;
 		TCPForkDaemon process = null;
 		
-		try {
-			forkParser = new XmlForkParser();
-			process = new TCPForkDaemon(forkParser, host, port);
-			exitStatus = process.exec(command);
-		} catch (ParserConfigurationException e) {
-			// This is not a crazy thing, we are trying to insert this new method without
-			// breaking the old methods which did not throw SAXException or ParserConfigurationException
-			// Do not blame me.
-			throw new IOException(e);
-		} catch (SAXException e) {
-			// This is not a crazy thing, we are trying to insert this new method without
-			// breaking the old methods which did not throw SAXException or ParserConfigurationException
-			// Do not blame me.
-			throw new IOException(e);
-		}	
-		
+
+		process = new TCPForkDaemon(host, port);
+		exitStatus = process.exec(command);
 
 		
 		if ((standarOutPut != null) && (process.getStdout() != null)){
@@ -177,27 +160,13 @@ public class LauncherProcesses {
 	 * @throws InterruptedException
 	 */
 	private static int execHandlingLogger(final String command, final Logger aLogger, 
-				final String host, int port) throws IOException, InterruptedException {
+				final String host, int port) throws IOException {
 		int exitStatus = LauncherProcesses.STATUS_ERR;
-		XmlForkParser forkParser = null;
 		TCPForkDaemon process = null;
 		
-		try {
-			forkParser = new XmlForkParser();
-			process = new TCPForkDaemon(forkParser, host, port);
-			exitStatus = process.exec(command);
-		} catch (ParserConfigurationException e) {
-			// This is not a crazy thing, we are trying to insert this new method without
-			// breaking the old methods which did not throw SAXException or ParserConfigurationException
-			// Do not blame me.
-			throw new IOException(e);
-		} catch (SAXException e) {
-			// This is not a crazy thing, we are trying to insert this new method without
-			// breaking the old methods which did not throw SAXException or ParserConfigurationException
-			// Do not blame me.
-			throw new IOException(e);
-		}
-		
+
+		process = new TCPForkDaemon(host, port);
+		exitStatus = process.exec(command);
 
 		
 		if (process.getStdout() != null) {
@@ -227,11 +196,9 @@ public class LauncherProcesses {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	public static InputStream execStream (final String [] command, final Logger aLogger) 
-													throws IOException, InterruptedException {
+	public static InputStream execStream (final String [] command, final Logger aLogger) throws IOException {
 		int exitStatus = LauncherProcesses.STATUS_ERR;
 		InputStream stdInput = null;
-		XmlForkParser forkParser = null;
 		TCPForkDaemon process = null;
 		String wholeCommand="";
 		
@@ -239,18 +206,14 @@ public class LauncherProcesses {
 			wholeCommand = wholeCommand + " " + argument;
 		}		
 		
-		try {
-			forkParser = new XmlForkParser();
-			process = new TCPForkDaemon(forkParser, DEFAULT_HOST, DEFAULT_PORT);
-			exitStatus = process.exec(wholeCommand);
-		} catch (ParserConfigurationException e) {
-			throw new IOException(e);
-		} catch (SAXException e) {
-			throw new IOException(e);
-		}
+
+		process = new TCPForkDaemon(DEFAULT_HOST, DEFAULT_PORT);
+		exitStatus = process.exec(wholeCommand);
 
 		
 		if(exitStatus == 0) {
+			//It must be used the remote charset.
+			//TODO: my own protocol
 			stdInput = new ByteArrayInputStream(process.getStdout().getBytes("UTF-8"));
 		}
 		else {
@@ -275,7 +238,7 @@ public class LauncherProcesses {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	public static int execInLocation (final String command, final String location) throws IOException, InterruptedException {
+	public static int execInLocation (final String command, final String location) throws IOException {
 		int exitStatus = LauncherProcesses.STATUS_ERR;
 		final String wholeCommand = "cd " + location + " && " + command;
 		
