@@ -533,7 +533,7 @@ int fork_system(int socket, char *command, int *returnstatus)
 
 
     /*Value by default*/
-    (*returnstatus) = 0;
+    (*returnstatus) = -1;
 
 	
     out[0] = out[1] = err[0] = err[1]  = -1;
@@ -645,7 +645,7 @@ int fork_system(int socket, char *command, int *returnstatus)
                     /*First of all, we check the exit status of our child process*/
                     /*In case of error send an error status to the remote calling process*/
                     if (WIFEXITED(childreturnstatus) != 1)
-                        (*returnstatus) = -1;
+                        goto err;
                     break;
                 }
                 /*The child process is not dead, keep polling more data from stdout or stderr streams*/
@@ -653,20 +653,23 @@ int fork_system(int socket, char *command, int *returnstatus)
         }
     }
     /*Stuff just done by the parent process. The child process ends with exit*/
-    /*Reaching this code when child ends*/
+    /*Reaching this code when child ends in the expected way*/
+    childreturnstatus = *returnstatus;
+    
+end:
     bzero(buf,2000);
     header->type = htonl(3);
-    header->length = htonl((*returnstatus));
+    header->length = htonl((childreturnstatus));
     if (TEMP_FAILURE_RETRY(send(socket, buf, sizeof(struct tcpforkhdr), 0)) < 0)
         syslog (LOG_INFO, "error while sending return status: %m");
 
-end:
     closeSafely (out[0]);
     closeSafely (out[1]);
     closeSafely (err[0]);
     closeSafely (err[1]);
     return returnValue;
 err:
+    childreturnstatus = -1;
     returnValue = -1;
 	goto end;
 }
