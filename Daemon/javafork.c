@@ -118,15 +118,20 @@ int main (int argc, char *argv[])
         return 1;
     }
 
-
-    /*INIT process sending SIGINT? Should I catch that signal?*/
     daemonPID = getpid();
+    /* If running from console, user may finish this process using SIGINT (Ctrl-C)*/
+    /* Check to make sure that the shell has not set up an initial action of SIG_IGN before I establish my own signal handler.
+     * As seen on http://www.gnu.org/software/libc/manual/html_node/Initial-Signal-Actions.html#Initial-Signal-Actions
+     */
     memset (&sa, 0, sizeof(sa));
-    sa.sa_handler = &sigint_handler;
-    sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGINT, &sa, NULL) < 0) {
-        syslog (LOG_ERR, "SIGINT signal handler failed: %m");
-        return 1;
+    sigaction (SIGINT, NULL, &sa);
+    if (sa.sa_handler != SIG_IGN) {
+        sa.sa_handler = &sigint_handler;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGINT, &sa, NULL) < 0) {
+            syslog (LOG_ERR, "SIGINT signal handler failed: %m");
+            return 1;
+        }
     }
 
 	
