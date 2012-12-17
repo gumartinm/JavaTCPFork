@@ -58,7 +58,7 @@ int main_daemon (char *address, int port, int queue);
 /* INPUT PARAMETER: socket file descriptor                                              */
 /* RETURNS: void                                                                        */
 /****************************************************************************************/
-int fork_system(int socket, char *command, int *returnst);
+int fork_system(int socket, unsigned char *command, int *returnst);
 
 
 
@@ -68,7 +68,7 @@ int fork_system(int socket, char *command, int *returnst);
 /* INPUT PARAMETER: socket file descriptor                                              */
 /* RETURNS: void                                                                        */
 /****************************************************************************************/
-int pre_fork_system(int socket, char *command);
+int pre_fork_system(int socket, unsigned char *command);
 
 
 
@@ -86,7 +86,7 @@ int required_sock_options (int socket);
 
 
 
-int receive_from_socket (int socket, char *data, int len, long timeout, long utimeout);
+int receive_from_socket (int socket, unsigned char *data, int len, long timeout, long utimeout);
 
 
 
@@ -94,4 +94,4 @@ int readable_timeout (int fd, long timeout, long utimeout);
 
 
 
-int readable (int socket, char *data, int len, int flags);
+int readable (int socket, unsigned char *data, int len, int flags);

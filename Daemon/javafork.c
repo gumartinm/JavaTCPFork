@@ -262,12 +262,12 @@ int daemonize(const char *pname, int facility, int option)
 
 void *serverThread (void * arg)
 {
-	int socket = -1;                /*Open socket by the Java client*/
-	long timeout, utimeout;         /*Timeout for reading data from client: secs and usecs*/
-                                    /*respectively*/
-    uint32_t commandLength = 0;     /*Store the command length*/
-    char *command = NULL;           /*The command sent by the client, to be executed by this process*/
-	char buffer[sizeof(uint32_t)];  /*This buffer is intended to store the data received from the client*/
+    int socket = -1;                        /*Open socket by the Java client*/
+    long timeout, utimeout;                 /*Timeout for reading data from client: secs and usecs*/
+                                            /*respectively*/
+    uint32_t commandLength = 0;             /*Store the command length*/
+    unsigned char *command = NULL;          /*The command sent by the client as bytes, to be executed by this process*/
+    unsigned char buffer[sizeof(uint32_t)]; /*This buffer is intended to store the data received from the client*/
 	
 	socket = (int) arg;
 	
@@ -311,7 +311,7 @@ void *serverThread (void * arg)
 
     /*2. COMMAND*/
     /*Reserving commandLength + 1 because of the string end character*/
-    if ((command = (char *) malloc(commandLength + 1)) == NULL) {
+    if ((command = (unsigned char *) malloc(commandLength + 1)) == NULL) {
         syslog (LOG_ERR, "command malloc failed: %m");
         goto err;
     }
@@ -407,7 +407,7 @@ int readable_timeout (int fd, long timeout, long utimeout)
 
 
 
-int readable (int socket, char *data, int len, int flags) 
+int readable (int socket, unsigned char *data, int len, int flags)
 {
     int received;   /*Stores received data from socket*/
 
@@ -434,7 +434,7 @@ int readable (int socket, char *data, int len, int flags)
 
 
 
-int receive_from_socket (int socket, char *data, int len, long timeout, long utimeout)
+int receive_from_socket (int socket, unsigned char *data, int len, long timeout, long utimeout)
 {
     int nData, iPos;	/*Control variables.*/
 
@@ -455,7 +455,7 @@ int receive_from_socket (int socket, char *data, int len, long timeout, long uti
 
 
 
-int pre_fork_system(int socket, char *command)
+int pre_fork_system(int socket, unsigned char *command)
 {
     /*Required variables in order to share memory between processes*/
     key_t keyvalue;
@@ -523,7 +523,7 @@ end:
 
 
 
-int fork_system(int socket, char *command, int *returnstatus) 
+int fork_system(int socket, unsigned char *command, int *returnstatus)
 {
     int pid;                /*Child or parent PID.*/
     int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
@@ -568,6 +568,7 @@ int fork_system(int socket, char *command, int *returnstatus)
         /*TODO: I should use execve with setlocale and the environment instead of system.*/
         /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
         /* will be ignored. From man system(3)*/
+        /*Attention: warning about signedness. I guess it does not hurt me.*/
         *returnstatus=system(command);
         if (WIFEXITED(returnstatus) == 1)
             (*returnstatus) = WEXITSTATUS(*returnstatus);
