@@ -101,23 +101,6 @@ int main (int argc, char *argv[])
 	}
 	
 
-    /*
-     * From man sigaction(2):
-     * A child created via fork(2) inherits a copy of its parent's signal dispositions.
-     * During an execve(2), the dispositions of handled signals are reset to the default; the
-     * dispositions of ignored signals are left unchanged.
-     * I want to ignore SIGCHLD without causing any issue to child processes.
-     */
-    memset (&sa, 0, sizeof(sa));
-    /*SIG_DFL: by default SIGCHLD is ignored.*/
-    sa.sa_handler = SIG_DFL;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) < 0) {
-        syslog (LOG_ERR, "SIGCHLD signal handler failed: %m");
-        return 1;
-    }
-
     daemonPID = getpid();
     /* If running from console, user may finish this process using SIGINT (Ctrl-C)*/
     /* Check to make sure that the shell has not set up an initial action of SIG_IGN before I establish my own signal handler.
@@ -160,6 +143,7 @@ int main_daemon (char *address, int port, int queue)
 	socklen_t clilen;
 	int optval;
 	int returnValue = 0;                /*The return value from this function, OK by default*/
+    sigset_t blockMask;
 	
 	
 	/*Retrieve protocol number from /etc/protocols file */
@@ -201,7 +185,30 @@ int main_daemon (char *address, int port, int queue)
 		goto err;
 	}	
 	
-	for(;;) {
+    /* Block SIGCHLD to prevent its delivery if a child terminates before the parent commences to wait for its end.*/
+    /* This is a multithreaded application so, we must use pthread_sigmask. Besides from these references:
+     * http://sunnyeves.blogspot.com.es/2010/09/sneak-peek-into-linux-kernel-chapter-2.html
+     * http://en.wikipedia.org/wiki/Parent_process
+     * The SIGCHLD signal is received by the parent process not the real parent (the real parent in this application is
+     * the thread that we are going to launch right now) So, I must block the signal before launching threads, in this way
+     * I am blocking the signal for the parent (this process) and the real one (the thread that is going to launch the command
+     * sent by the user using a child process for that task) because from man pthread_sigmask "other threads created by main() will inherit
+     * a copy of the signal mask". I wonder what could happen in case of using siprocmask.
+     */
+    if (sigemptyset(&blockMask) < 0) {
+    syslog (LOG_ERR, "SIGCHLD empty mask: %m");
+        goto err;
+    }
+    if (sigaddset(&blockMask, SIGCHLD) <0) {
+    syslog (LOG_ERR, "SIGCHLD sigaddset mask: %m");
+        goto err;
+    }
+    if (pthread_sigmask(SIG_BLOCK, &blockMask, NULL) == -1) {
+    syslog (LOG_ERR, "pthread_sigmask failed: %m");
+        goto err;
+    }
+
+    for(;;) {
 		clilen =  sizeof(addr_client);
 		if ((sockclient = TEMP_FAILURE_RETRY(accept (sockfd, (struct sockaddr *) &addr_client, &clilen))) < 0) {
 			syslog (LOG_ERR, "socket accept failed: %m");
