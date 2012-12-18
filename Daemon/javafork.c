@@ -32,8 +32,9 @@
 
 
 
-pid_t daemonPID;        /*Stores the daemon server PID*/
-int sockfd = -1;        /*Stores the daemon server TCP socket.*/
+pid_t daemonPID;                /*Stores the daemon server PID*/
+struct sigaction sigintAction;  /*Stores the init SIGINT sigaction value*/
+int sockfd = -1;                /*Stores the daemon server TCP socket.*/
 
 
 
@@ -107,11 +108,16 @@ int main (int argc, char *argv[])
      * As seen on http://www.gnu.org/software/libc/manual/html_node/Initial-Signal-Actions.html#Initial-Signal-Actions
      */
     memset (&sa, 0, sizeof(sa));
+    memset (&sigintAction, 0, sizeof(sigaction));
     if (sigaction (SIGINT, NULL, &sa) < 0) {
         syslog (LOG_ERR, "SIGINT retrieve current signal handler failed: %m");
         return 1;
     }
+
     if (sa.sa_handler != SIG_IGN) {
+        /* Save the current SIGINT sigaction value. We use it to restore SIGINT handler in my custom SIGINT handler.*/
+        memcpy (&sigintAction, &sa, sizeof(sigaction));
+
         sa.sa_handler = &sigint_handler;
         sa.sa_flags = SA_RESTART;
         if (sigemptyset(&sa.sa_mask) < 0) {
@@ -705,5 +711,18 @@ void sigint_handler(int sig)
 
     closeSafely (sockfd);
     /*TODO: kill child processes, finish threads and release allocate memory*/
-    exit (0);
+    /* From http://www.cons.org/cracauer/sigint.html
+     * Since a shellscript may in turn be called by a shellscript, you need to make sure that you properly
+     * communicate the discontinue intention to the calling program. WIFSIGNALED(status) and WTERMSIG(status)
+     * tell whether the child says "I exited on SIGINT". These values are used by the shell to discontinue
+     * the whole shell script in execution. If I use exit the shell has no way to know the user pressed Ctrl-C
+     * in order to stop the shell script in execution. This has just meaning when this program is executed in a shell script
+     * but because I do not know how the user is going to use it I must always finish every SIGINT handler in this way.
+     * So from a handler for SIGINT I must always finish with kill(SIGINT, SIG_DFL) (default kills the application)
+     */
+    if (sigaction(SIGINT, &sigintAction, NULL) < 0) {
+        syslog (LOG_ERR, "SIGINT restore signal handler failed: %m");
+        exit (1);
+    }
+    kill(getpid(), SIGINT);
 }
