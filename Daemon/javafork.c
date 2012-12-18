@@ -124,12 +124,19 @@ int main (int argc, char *argv[])
      * As seen on http://www.gnu.org/software/libc/manual/html_node/Initial-Signal-Actions.html#Initial-Signal-Actions
      */
     memset (&sa, 0, sizeof(sa));
-    sigaction (SIGINT, NULL, &sa);
+    if (sigaction (SIGINT, NULL, &sa) < 0) {
+        syslog (LOG_ERR, "SIGINT retrieve current signal handler failed: %m");
+        return 1;
+    }
     if (sa.sa_handler != SIG_IGN) {
         sa.sa_handler = &sigint_handler;
-        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        if (sigemptyset(&sa.sa_mask) < 0) {
+            syslog (LOG_ERR, "SIGINT empty mask: %m");
+            return 1;
+        }
         if (sigaction(SIGINT, &sa, NULL) < 0) {
-            syslog (LOG_ERR, "SIGINT signal handler failed: %m");
+            syslog (LOG_ERR, "SIGINT set signal handler failed: %m");
             return 1;
         }
     }
