@@ -555,6 +555,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
     int childreturnstatus;
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
+    sigset_t unBlockMask;   /*Used by the child process in order to unblock the SIGCHLD signal, which was blocked by the main process.*/
 
 
     /*Value by default*/
@@ -578,6 +579,27 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
     if (pid == 0) {
         /*Child process*/
         /*It has to launch another one using system or execve*/
+        /*TODO: close every fd but 0, 1, 2 (or my pipes) and the read end of my pipes.*/
+
+        /*Unblock SIGCHLD*/
+        if (sigemptyset(&unBlockMask) < 0) {
+            syslog (LOG_ERR, "Unblock SIGCHLD empty mask: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            exit(-1);
+        }
+        if (sigaddset(&unBlockMask, SIGCHLD) <0) {
+            syslog (LOG_ERR, "Unblock SIGCHLD sigaddset mask: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            exit(-1);
+        }
+        /*Should I use pthread_sigmask?*/
+        if (sigprocmask(SIG_UNBLOCK, &unBlockMask, NULL) == -1) {
+            syslog (LOG_ERR, "Unblock sigprocmask failed: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            exit(-1);
+        }
+
+        /*Attach pipes to the stderr and stdout streams*/
         if ((TEMP_FAILURE_RETRY(dup2(out[1], 1)) < 0) || (TEMP_FAILURE_RETRY(dup2(err[1], 2)) < 0)) {	
             syslog (LOG_ERR, "child dup2 failed: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/	
@@ -600,6 +622,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
     else {
         /*Parent process*/
         /*It sends data to the Java client using a TCP connection.*/
+        /*TODO: close the write end of my pipes.*/
         polls[0].fd=out[0];
         polls[1].fd=err[0];
         polls[0].events = polls[1].events = POLLIN;
