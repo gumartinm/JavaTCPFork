@@ -545,7 +545,7 @@ end:
 
 int fork_system(int socket, unsigned char *command, int *returnstatus)
 {
-    int pid;                /*Child or parent PID.*/
+    pid_t pid;              /*Child or parent PID.*/
     int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
                             /*and stderr streams.*/
     u_char buf[2000];       /*Read data buffer. allignment(int) * 500.*/
@@ -599,7 +599,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
             exit(-1);
         }
 
-        /*Attach pipes to the stderr and stdout streams*/
+        /*Attach stderr and stdout streams to my pipes (their write end)*/
         if ((TEMP_FAILURE_RETRY(dup2(out[1], 1)) < 0) || (TEMP_FAILURE_RETRY(dup2(err[1], 2)) < 0)) {	
             syslog (LOG_ERR, "child dup2 failed: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/	
