@@ -585,25 +585,25 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
         if (sigemptyset(&unBlockMask) < 0) {
             syslog (LOG_ERR, "Unblock SIGCHLD empty mask: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/
-            exit(-1);
+            _exit(EXIT_FAILURE);
         }
         if (sigaddset(&unBlockMask, SIGCHLD) <0) {
             syslog (LOG_ERR, "Unblock SIGCHLD sigaddset mask: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/
-            exit(-1);
+            _exit(EXIT_FAILURE);
         }
         /*Should I use pthread_sigmask?*/
         if (sigprocmask(SIG_UNBLOCK, &unBlockMask, NULL) == -1) {
             syslog (LOG_ERR, "Unblock sigprocmask failed: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/
-            exit(-1);
+            _exit(EXIT_FAILURE);
         }
 
         /*Attach stderr and stdout streams to my pipes (their write end)*/
         if ((TEMP_FAILURE_RETRY(dup2(out[1], 1)) < 0) || (TEMP_FAILURE_RETRY(dup2(err[1], 2)) < 0)) {	
             syslog (LOG_ERR, "child dup2 failed: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/	
-            exit(-1);
+            _exit(EXIT_FAILURE);
         }
 
 
@@ -611,13 +611,14 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
         /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
         /* will be ignored. From man system(3)*/
         /*Attention: warning about signedness. I guess it does not hurt me.*/
+        /*TODO: usar para el retorno de system una variable local mejor que la variable compartida????*/
         *returnstatus=system(command);
         if (WIFEXITED(returnstatus) == 1)
             (*returnstatus) = WEXITSTATUS(*returnstatus);
         else
             (*returnstatus) = -1;
         /*Going to zombie state, hopefully waitpid will catch it*/
-        exit(0);
+        _exit(EXIT_SUCCESS);
     }
     else {
         /*Parent process*/
@@ -745,7 +746,7 @@ void sigint_handler(int sig)
      */
     if (sigaction(SIGINT, &sigintAction, NULL) < 0) {
         syslog (LOG_ERR, "SIGINT restore signal handler failed: %m");
-        exit (1);
+        exit (EXIT_FAILURE);
     }
     kill(getpid(), SIGINT);
 }
