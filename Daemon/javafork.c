@@ -287,7 +287,7 @@ void *serverThread (void * arg)
                                             /*respectively*/
     uint32_t commandLength = 0;             /*Store the command length*/
     unsigned char *command = NULL;          /*The command sent by the client as bytes, to be executed by this process*/
-    unsigned char buffer[sizeof(uint32_t)]; /*This buffer is intended to store the data received from the client*/
+    unsigned char buffer[sizeof(unsigned char)]; /*This buffer is intended to store the data received from the client*/
 	
 	socket = (int) arg;
 	
