@@ -60,7 +60,7 @@ int main (int argc, char *argv[])
     /*This process is intended to be used as a daemon, it sould be launched by the INIT process, because of that*/
 	/*we are not forking it (INIT needs it)*/
 	if (daemonize(argv[0], LOG_SYSLOG, LOG_PID) < 0)
-		return 1;
+		return -1;
 
 	/*Changing session.*/	
 	setsid();
@@ -76,7 +76,7 @@ int main (int argc, char *argv[])
 			pvalue = atoi(optarg);
 			if ((pvalue > 65535) || (pvalue <= 0)) {
 				syslog (LOG_ERR, "Port value %d out of range", pvalue);
-				return 1;
+				return -1;
 			}
 			break;
 		case 'q':
@@ -89,7 +89,7 @@ int main (int argc, char *argv[])
 				syslog (LOG_ERR, "Invalid option '-%c'.", optopt);
 			else
 				syslog (LOG_ERR, "Unknown option character '\\x%x'.", optopt);
-			return 1;
+			return -1;
 		default:
 			abort ();
 		}
@@ -98,7 +98,7 @@ int main (int argc, char *argv[])
 	/*This program does not admit options*/
 	if (optind < argc) {
 		syslog (LOG_ERR,"This program does not admit options just argument elements with their values.");
-		return 1;
+		return -1;
 	}
 	
 
@@ -111,7 +111,7 @@ int main (int argc, char *argv[])
     memset (&sigintAction, 0, sizeof(sigaction));
     if (sigaction (SIGINT, NULL, &sa) < 0) {
         syslog (LOG_ERR, "SIGINT retrieve current signal handler failed: %m");
-        return 1;
+        return -1;
     }
 
     if (sa.sa_handler != SIG_IGN) {
@@ -122,17 +122,17 @@ int main (int argc, char *argv[])
         sa.sa_flags = SA_RESTART;
         if (sigemptyset(&sa.sa_mask) < 0) {
             syslog (LOG_ERR, "SIGINT empty mask: %m");
-            return 1;
+            return -1;
         }
         if (sigaction(SIGINT, &sa, NULL) < 0) {
             syslog (LOG_ERR, "SIGINT set signal handler failed: %m");
-            return 1;
+            return -1;
         }
     }
 
 	
 	if (main_daemon (avalue, pvalue, qvalue) < 0)
-		return 1;
+		return -1;
 	
 	return 0;
 }
@@ -246,7 +246,8 @@ int daemonize(const char *pname, int facility, int option)
         closeSafely(fd);
         return 0;
 	}
-	
+
+    /*TODO: Errors from syslog function*/
 	/*Sending messages to log*/
 	openlog(pname, option, facility);
 
@@ -415,7 +416,7 @@ int readable_timeout (int fd, long timeout, long utimeout)
     ret = TEMP_FAILURE_RETRY(select(fd+1, &fd_read, NULL, NULL, &ptime)); 
     
     if (ret == 0) {
-        syslog(LOG_INFO, "receiving timeout error");
+        syslog(LOG_INFO, "receiving timeout error: %m");
         return -1;
     } else if (ret == -1) {
         syslog(LOG_ERR, "receiving error: %m");
@@ -556,6 +557,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
     sigset_t unBlockMask;   /*Used by the child process in order to unblock the SIGCHLD signal, which was blocked by the main process.*/
+    int pollReturn;
 
 
     /*Value by default*/
@@ -578,8 +580,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
 
     if (pid == 0) {
         /*Child process*/
-        /*It has to launch another one using system or execve*/
-        /*TODO: close every fd but 0, 1, 2 (or my pipes) and the read end of my pipes.*/
+        /*It has to launch another one using system or better directly using execve*/
 
         /*Unblock SIGCHLD*/
         if (sigemptyset(&unBlockMask) < 0) {
@@ -606,6 +607,13 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
             _exit(EXIT_FAILURE);
         }
 
+        /*Close useless file descriptors. The child inherits copies of the parent's set of open file descriptors. See as well: CLOEXEC*/
+        closeSafely (out[0]);
+        closeSafely (out[1]);
+        closeSafely (err[0]);
+        closeSafely (err[1]);
+        closeSafely (sockfd);
+        closeSafely (socket);
 
         /*TODO: I should use execve with setlocale and the environment instead of system.*/
         /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
@@ -624,12 +632,15 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
         /*Parent process*/
         /*It sends data to the Java client using a TCP connection.*/
         /*TODO: close the write end of my pipes.*/
+
+        /*Attach pipes' read end to pollfd*/
         polls[0].fd=out[0];
         polls[1].fd=err[0];
         polls[0].events = polls[1].events = POLLIN;
 
         for (;;) {
-            if(poll(polls, 2, 100)) {
+            pollReturn = poll(polls, 2, 100);
+            if(pollReturn > 0) {
                 if(polls[0].revents && POLLIN) {
                     bzero(buf,2000);
                     n=TEMP_FAILURE_RETRY(read(out[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
@@ -662,7 +673,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                     header->type = htonl(2);
                     header->length = htonl(n);
                     if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), 0)) < 0)
-                        syslog (LOG_INFO, "error while sending stdout: %m");
+                        syslog (LOG_INFO, "error while sending stderr: %m");
                 }
 
                 if(!(polls[0].revents && POLLIN) && !(polls[1].revents && POLLIN)) {
@@ -687,7 +698,7 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                     goto err;
                 }
             }   
-            else {
+            else if (pollReturn == 0) {
                 /*When timeout*/
                 if(TEMP_FAILURE_RETRY(waitpid(pid, &childreturnstatus, WNOHANG))) {
                     //TODO: treating errors in waitpid function
@@ -699,6 +710,17 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                     break;
                 }
                 /*The child process is not dead, keep polling more data from stdout or stderr streams*/
+            }
+            else {
+                /*Return with error from poll*/
+                syslog (LOG_ERR, "poll error: %m");
+
+                /*Trying to kill child process*/
+                if (kill (pid, SIGTERM) == -1) {
+                    syslog (LOG_ERR, "kill error: %m");
+                }
+
+                goto err;
             }
         }
     }
