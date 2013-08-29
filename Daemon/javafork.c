@@ -59,11 +59,15 @@ int main (int argc, char *argv[])
 
     /*This process is intended to be used as a daemon, it sould be launched by the INIT process, because of that*/
 	/*we are not forking it (INIT needs it)*/
+    /*TODO: I think this is not needed because setsid function performs it*/
 	if (daemonize(argv[0], LOG_SYSLOG, LOG_PID) < 0)
 		return -1;
 
 	/*Changing session.*/	
-	setsid();
+    if (setsid() < 0) {
+        syslog (LOG_ERR, "setsid failed: %m");
+        return -1;
+    }
 
 	
 	opterr = 0;
