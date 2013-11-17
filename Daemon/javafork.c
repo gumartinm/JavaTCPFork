@@ -64,10 +64,7 @@ int main (int argc, char *argv[])
 		return -1;
 
 	/*Changing session.*/	
-    if (setsid() < 0) {
-        syslog (LOG_ERR, "setsid failed: %m");
-        return -1;
-    }
+    setsid();
 
 	
 	opterr = 0;
