@@ -2,7 +2,6 @@ package de.fork.java;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
@@ -43,6 +42,8 @@ public class TCPForkDaemon {
 	private String streamStderr;
 	//Error by default.
 	private int results = -1;
+	int type;
+        int length;
 	
 	
 	/**
@@ -102,7 +103,7 @@ public class TCPForkDaemon {
 	/*              JAVA CLIENT: ------------ COMMAND_LENGTH -------> :SERVER                 */
 	/*              JAVA CLIENT: -------------- COMMAND ------------> :SERVER                 */
 	/*              JAVA CLIENT: <-------------- RESULTS ------------ :SERVER                 */
-	/*              JAVA CLIENT: <---------- CLOSE CONNECTION ------- :SERVER                 */
+	/*              JAVA CLIENT: ----------- CLOSE CONNECTION ------> :SERVER                 */
 	/*                                                                                        */
 	/******************************************************************************************/
 		
@@ -162,9 +163,10 @@ public class TCPForkDaemon {
 			//sends response to Java client and here we know the character set encoding is the defined for TCPForkDaemon protocol 
 			//(for example UTF-8) In this way we do not need to know about the remote encoding and everything could run automatically. 		
 			receiveData = new DataInputStream(socket.getInputStream());
-			while (true) {
-				int type = receiveData.readInt();
-				int length = receiveData.readInt();
+			this.type = receiveData.readInt();
+                        this.length = receiveData.readInt();
+			while (this.type != 3) {
+
 				switch (type) {
 				case 0:
 					//STDIN not implemented
@@ -181,18 +183,14 @@ public class TCPForkDaemon {
 					receiveData.readFully(dataStderr, 0, length);
 					stderr.write(dataStderr, 0, length);
 					break;
-				case 3:
-					//RESULTS
-					results = length;
-					break;
 				default:
 					throw new IOException("Unrecognized type.");
 						
 				}
+
+				this.type = receiveData.readInt();
+	                        this.length = receiveData.readInt();
 			}	
-		} catch (EOFException e) {
-			// 4. SERVER CLOSED CONNECTION
-			//TODO: Java NIO with select, and stop using this crappy code.
 		}
 		finally {
 			if (lengthAndCommand != null) {
@@ -207,14 +205,17 @@ public class TCPForkDaemon {
 				socket.close();
 			}
 			
-			//The remote charset. 
-			//TODO: my own protocol as above specified.
-			this.streamStderr = new String(stderr.toByteArray(), "UTF-8");
-			this.streamStdout = new String(stdout.toByteArray(), "UTF-8");
 		}
-		
+
+		//RESULTS
+		//The remote charset.
+                //TODO: my own protocol as above specified.
+                this.streamStderr = new String(stderr.toByteArray(), "UTF-8");
+                this.streamStdout = new String(stdout.toByteArray(), "UTF-8");
+
 		//If everything went all right we should be able to retrieve the return 
 		//status of the remotely executed command.
+                this.results = this.length;
 		return this.results;
 		
 	}

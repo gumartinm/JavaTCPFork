@@ -309,7 +309,7 @@ void *serverThread (void * arg)
             /*          JAVA CLIENT: ------------ COMMAND_LENGTH -------> :SERVER                   */
             /*          JAVA CLIENT: -------------- COMMAND ------------> :SERVER                   */
             /*          JAVA CLIENT: <-------------- RESULTS ------------ :SERVER                   */
-            /*          JAVA CLIENT: <---------- CLOSE CONNECTION ------- :SERVER                   */
+            /*          JAVA CLIENT: ----------- CLOSE CONNECTION ------> :SERVER                   */
             /*                                                                                      */
             /****************************************************************************************/
 
@@ -346,10 +346,23 @@ void *serverThread (void * arg)
 
 
     /*3. RESULTS*/	
-    pre_fork_system(socket, command);
+    if (pre_fork_system(socket, command) < 0)
+        goto err;
 
-
-    /*4. CLOSE CONNECTION AND FINISH*/
+    /*4. WAIT FOR CLIENT TO CLOSE CONNECTION AND FINISH*/
+    // We may avoid the TIME_WAIT state in the server side if we always wait for the client to close the connection.
+    // Never use SO_LINGER!!! The client should be able to know when there are no more data. The protocol
+    // (application level) should notify the client when the server ended up sending data and in this
+    // way the client is able to close the connection.
+    // See:
+    // http://blog.netherlabs.nl/articles/2009/01/18/the-ultimate-so_linger-page-or-why-is-my-tcp-not-reliable
+    // http://www.serverframework.com/asynchronousevents/2011/01/time-wait-and-its-design-implications-for-protocols-and-scalable-servers.html
+    // http://stackoverflow.com/questions/3757289/tcp-option-so-linger-zero-when-its-required
+    bzero(buffer, sizeof(buffer));
+    // TODO: I just want to wait until the socket is closed (or there is a timeout).
+    // Should I use another method for that instead of this one? :/ This code does not look clear to me... There must be something better...
+    if (receive_from_socket (socket, buffer, sizeof(uint32_t), timeout, utimeout) < 0)
+        goto err;
 
 err:
     free(command);
