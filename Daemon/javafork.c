@@ -28,6 +28,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <endian.h>
+#include <time.h>
 #include "javafork.h"
 
 
@@ -358,11 +359,9 @@ void *serverThread (void * arg)
     // http://blog.netherlabs.nl/articles/2009/01/18/the-ultimate-so_linger-page-or-why-is-my-tcp-not-reliable
     // http://www.serverframework.com/asynchronousevents/2011/01/time-wait-and-its-design-implications-for-protocols-and-scalable-servers.html
     // http://stackoverflow.com/questions/3757289/tcp-option-so-linger-zero-when-its-required
-    bzero(buffer, sizeof(buffer));
-    // TODO: I just want to wait until the socket is closed (or there is a timeout).
-    // Should I use another method for that instead of this one? :/ This code does not look clear to me... There must be something better...
-    if (receive_from_socket (socket, buffer, sizeof(uint32_t), timeout, utimeout) < 0)
-        goto err;
+    if (wait_for_closed_socket(socket, timeout) < 0)
+        syslog (LOG_ERR, "client did not close connection in time");
+
 
 err:
     free(command);
@@ -451,17 +450,17 @@ int readable (int socket, unsigned char *data, int len, int flags)
     if (received < 0) {
         if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
             syslog (LOG_ERR, "read TCP socket failed: %m");
-            return -1;
+            received = -1;
         } else {
             /*see spurious readiness man select(2) BUGS section*/
-            received = 0;
             syslog (LOG_INFO, "read TCP socket spurious readiness");
+            received = 0;
         }
     } else if (received == 0) {
         /*if received is 0, client closed connection but we wanted to receive more data, */
         /*this is an error */
         syslog (LOG_ERR, "expected more data, closed connection from client");
-        return -1;
+        received = -1;
     }
 
     return received;
@@ -486,6 +485,64 @@ int receive_from_socket (int socket, unsigned char *data, int len, long timeout,
     } while (len > 0);
 
     return 0;
+}
+
+
+
+int is_closed_socket (int socket)
+{
+    int isClosed;   /*Stores received data from socket. We expect 0 data from client (closed connection)*/
+    unsigned char dummyData[10];
+    int dummyLen;
+    int dummyFlags;
+
+    dummyLen = 10;
+    dummyFlags = 0;
+
+    isClosed = TEMP_FAILURE_RETRY(recv(socket, dummyData, dummyLen, dummyFlags));
+
+    if (isClosed < 0) {
+        if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+            syslog (LOG_ERR, "read TCP socket failed: %m");
+            isClosed = -1;
+        } else {
+            /*see spurious readiness man select(2) BUGS section*/
+            syslog (LOG_INFO, "read TCP socket spurious readiness");
+            isClosed = -1;
+        }
+    } else if (isClosed > 0) {
+        /*client should not have sent any data */
+        /*this is an error */
+        syslog (LOG_ERR, "unexpected data from client");
+        isClosed = -1;
+    }
+
+    return isClosed;
+}
+
+
+
+int wait_for_closed_socket (int socket, long timeout)
+{
+    time_t start_t, end_t;
+    double diff_t;
+
+    do {
+        time(&start_t);
+
+        if (readable_timeout(socket, timeout, 0) < 0)
+            return -1;
+
+        if (is_closed_socket(socket) == 0)
+            return 0;
+
+        time(&end_t);
+        diff_t = difftime(end_t, start_t);
+        timeout -= diff_t;
+
+    } while (timeout > 0);
+
+    return -1;
 }
 
 

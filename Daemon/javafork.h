@@ -95,3 +95,11 @@ int readable_timeout (int fd, long timeout, long utimeout);
 
 
 int readable (int socket, unsigned char *data, int len, int flags);
+
+
+
+int is_closed_socket (int socket);
+
+
+
+int wait_for_closed_socket (int socket, long timeout);
