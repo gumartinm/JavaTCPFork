@@ -615,6 +615,48 @@ end:
 
 
 
+int polite_kill_and_wait(pid_t pid)
+{
+    if (kill(pid, SIGTERM) < 0) {
+        syslog (LOG_ERR, "error while sending SIGTERM to child process: %m");
+        return -1;
+    }
+
+    sleep(5);
+
+    // It might be interesting to use if/ else if/ else if/ to write error log when waitpid returns -1 and 0.
+    // In this case when -1 or 0 I am using the same LOG_ERR (see the next call to syslog just below)
+    // the problem is, when -1 the error is different than when 0. Perhaps it would be interesting to show a different
+    // error log when -1 and when 0.
+    if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, WNOHANG)) > 0) {
+        // Child process is dead.
+        return 0;
+    }
+
+    syslog (LOG_ERR, "waitpid after SIGTERM did not work, next step trying with SIGKILL: %m");
+
+    if (kill(pid, SIGKILL) < 0) {
+        syslog (LOG_ERR, "error while sending SIGKILL to child process: %m");
+        return -1;
+    }
+
+    sleep(5);
+
+    if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, WNOHANG)) > 0) {
+        // Child process is dead.
+        return 0;
+    }
+
+    /*We are not sure if the child process is dead. In this case, */
+    /*probably the child process is going to be an orphan and its */
+    /*system process (if there is one) as well*/
+    syslog (LOG_ERR, "waitpid after SIGKILL did not work either: %m");
+
+    return -1;
+}
+
+
+
 int fork_system(int socket, unsigned char *command, int *returnstatus)
 {
     pid_t pid;              /*Child or parent PID.*/
@@ -734,8 +776,15 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                     //and the client application must know what it has to do with them. 
                     //TODO: my own protocol to make the client independent of the ENDIANNESS and character set used
                     //by the machine running this server. See comments in the TCPForkDaemon.java code about this.
-                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), 0)) < 0)
+
+                    // Avoid SIGPIPE with MSG_NOSIGNAL flag. It just works on Linux OS (non portable code)
+                    // Portable alternatives: sighandler for SIGPIPE or block/ignore SIGPIPE.
+                    // There is SIGPIPE JUST when using send/write (no with read/recv) and remote side closed connection.
+                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), MSG_NOSIGNAL)) < 0) {
                         syslog (LOG_INFO, "error while sending stdout: %m");
+                        polite_kill_and_wait(pid);
+                        goto err;
+                    }
                 }
  
                 if(polls[1].revents && POLLIN) {
@@ -743,54 +792,50 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                     n=TEMP_FAILURE_RETRY(read(err[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
                     header->type = htonl(2);
                     header->length = htonl(n);
-                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), 0)) < 0)
+
+                    // Avoid SIGPIPE with MSG_NOSIGNAL flag. It just works on Linux OS (non portable code)
+                    // Portable alternatives: sighandler for SIGPIPE or block/ignore SIGPIPE.
+                    // There is SIGPIPE JUST when using send/write (no with read/recv) and remote side closed connection.
+                    if (TEMP_FAILURE_RETRY(send(socket, buf, n+sizeof(struct tcpforkhdr), MSG_NOSIGNAL)) < 0) {
                         syslog (LOG_INFO, "error while sending stderr: %m");
+                        polite_kill_and_wait(pid);
+                        goto err;
+                    }
                 }
 
                 if(!(polls[0].revents && POLLIN) && !(polls[1].revents && POLLIN)) {
                     syslog (LOG_ERR, "parent error polling pipes: %m");
-
-                    if (kill(pid, SIGKILL /*should I use SIGTERM and my own handler?*/) < 0) {
-                        /*We are not sure if the child process will die. In this case, */
-                        /*probably the child process is going to be an orphan and its */
-                        /*system process (if there is one) as well*/
-                        syslog (LOG_ERR, "error while killing child process: %m");
-                        goto err;
-                    }
-
-                    if (TEMP_FAILURE_RETRY(waitpid(pid, NULL, 0)) < 0) {
-                        /*We are not sure if the child process is dead. In this case, */
-                        /*probably the child process is going to be an orphan and its */
-                        /*system process (if there is one) as well*/
-                        syslog (LOG_ERR, "error while waiting for killed child process: %m");
-                    }
-
+                    polite_kill_and_wait(pid);
                     /*In the Java code, the client will get an error as the return status from the exec method.*/
                     goto err;
                 }
             }   
             else if (pollReturn == 0) {
                 /*When timeout*/
-                if(TEMP_FAILURE_RETRY(waitpid(pid, &childreturnstatus, WNOHANG))) {
-                    //TODO: treating errors in waitpid function
+                int waitpidReturn;
+                int status;
+                waitpidReturn = TEMP_FAILURE_RETRY(waitpid(pid, &status, WNOHANG));
+                if(waitpidReturn > 0) {
                     /*Child is dead, we can finish the connection*/
                     /*First of all, we check the exit status of our child process*/
                     /*In case of error send an error status to the remote calling process*/
-                    if (WIFEXITED(childreturnstatus) != 1)
+                    if (WIFEXITED(status) != 1)
                         goto err;
                     break;
                 }
+                else if(waitpidReturn < 0) {
+                    // Error when using waitpid function
+                    syslog (LOG_ERR, "waitpid error after poll timeout from child process: %m");
+                    polite_kill_and_wait(pid);
+                    goto err;
+                }
+
                 /*The child process is not dead, keep polling more data from stdout or stderr streams*/
             }
             else {
                 /*Return with error from poll*/
                 syslog (LOG_ERR, "poll error: %m");
-
-                /*Trying to kill child process*/
-                if (kill (pid, SIGTERM) == -1) {
-                    syslog (LOG_ERR, "kill error: %m");
-                }
-
+                polite_kill_and_wait(pid);
                 goto err;
             }
         }
@@ -803,7 +848,10 @@ end:
     bzero(buf,2000);
     header->type = htonl(3);
     header->length = htonl((childreturnstatus));
-    if (TEMP_FAILURE_RETRY(send(socket, buf, sizeof(struct tcpforkhdr), 0)) < 0)
+    // Avoid SIGPIPE with MSG_NOSIGNAL flag. It just works on Linux OS (non portable code)
+    // Portable alternatives: sighandler for SIGPIPE or block/ignore SIGPIPE.
+    // There is SIGPIPE JUST when using send/write (no with read/recv) and remote side closed connection.
+    if (TEMP_FAILURE_RETRY(send(socket, buf, sizeof(struct tcpforkhdr), MSG_NOSIGNAL)) < 0)
         syslog (LOG_INFO, "error while sending return status: %m");
 
     closeSafely (out[0]);

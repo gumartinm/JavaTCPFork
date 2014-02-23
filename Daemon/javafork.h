@@ -103,3 +103,7 @@ int is_closed_socket (int socket);
 
 
 int wait_for_closed_socket (int socket, long timeout);
+
+
+
+int polite_kill_and_wait(pid_t pid);
