@@ -58,7 +58,7 @@ int main_daemon (char *address, int port, int queue);
 /* INPUT PARAMETER: socket file descriptor                                              */
 /* RETURNS: void                                                                        */
 /****************************************************************************************/
-int fork_system(int socket, unsigned char *command, int *returnst);
+int fork_system(int socket, unsigned char *command);
 
 
 

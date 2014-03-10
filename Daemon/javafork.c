@@ -19,8 +19,6 @@
 #include <arpa/inet.h>
 #include <strings.h>
 #include <pthread.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
 #include <sys/wait.h>
 #include <sys/poll.h>
 #include <string.h>
@@ -347,7 +345,7 @@ void *serverThread (void * arg)
 
 
     /*3. RESULTS*/	
-    if (pre_fork_system(socket, command) < 0)
+    if (fork_system(socket, command) < 0)
         goto err;
 
     /*4. WAIT FOR CLIENT TO CLOSE CONNECTION AND FINISH*/
@@ -547,71 +545,6 @@ int wait_for_closed_socket (int socket, long timeout)
 
 
 
-int pre_fork_system(int socket, unsigned char *command)
-{
-    /*Required variables in order to share memory between processes*/
-    key_t keyvalue;
-    int idreturnstatus = -1;
-    /*Store the return status from the process launched using system or execve*/
-    /*Using shared memory between the child and parent process*/
-    int *returnstatus = NULL;
-	
-    int returnValue = -1;       /*Return value from this function can be caught by upper*/
-                                /*layers, NOK by default*/
-
-    // TODO: stop using shared memory. There must be another way to do this. 
-    // See OpenJDK Fork Process, it uses a file descriptor.
-		
-    /*
-     * Allocate shared memory for the return status code from the process which is 
-     * going to be launched by the system function. We want to share the returnstatus 
-     * variable between this process and the child that is going to be created in the 
-     * fork_system method.
-     * The goal is to store in this variable the return status code received from the 
-     * process launched with the system method by the child process, then the parent 
-     * process can retrieve that return status code and send it by TCP to the Java client.
-     * There are not concurrency issues because the parent process will just try to read 
-     * this variable when the child process is dead, taking in that moment its last value 
-     * and sending it to the Java client.
-     */
-
-    /*the /bin/ls must exist otherwise this does not work... */
-    keyvalue=ftok("/bin/ls", SHAREMEMKEY); 
-    if (keyvalue == -1) {
-        syslog (LOG_ERR, "ftok failed: %m");
-        goto end;
-    }
-
-    /*Attach shared memory*/
-    if ((idreturnstatus=shmget(keyvalue,sizeof(int), 0660 | IPC_CREAT)) < 0) {
-        syslog (LOG_ERR, "shmget failed: %m");
-        goto end_release_mem;
-    }
-
-    returnstatus = (int *)shmat(idreturnstatus, (void *)0, 0);
-    if ((*returnstatus)== -1) {
-        syslog (LOG_ERR, "shmat failed: %m");
-        goto end_release_mem;
-    } 
-
-    /*After allocating and attaching shared memory we reach this code if everything went OK.*/
-
-    returnValue = fork_system(socket, command, returnstatus);
-
-
-end_release_mem:
-    if (returnstatus != NULL) {
-        /*detach memory*/
-        if (shmdt ((int *)returnstatus) < 0)
-            syslog (LOG_ERR, "returnstatus shared variable shmdt failed: %m");
-    }
-
-    /*Mark the segment to be destroyed.*/
-    if (shmctl (idreturnstatus, IPC_RMID, (struct shmid_ds *)NULL) < 0 )
-        syslog (LOG_ERR, "returnstatus shared variable shmctl failed: %m");
-end:
-    return returnValue;
-}
 
 
 
@@ -657,7 +590,7 @@ int polite_kill_and_wait(pid_t pid)
 
 
 
-int fork_system(int socket, unsigned char *command, int *returnstatus)
+int fork_system(int socket, unsigned char *command)
 {
     pid_t pid;              /*Child or parent PID.*/
     int out[2], err[2];     /*Store pipes file descriptors. Write ends attached to the stdout*/
@@ -666,15 +599,14 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
     struct pollfd polls[2]; /*pipes attached to the stdout and stderr streams.*/
     int n;                  /*characters number from stdout and stderr*/
     struct tcpforkhdr *header = (struct tcpforkhdr *)buf;
-    int childreturnstatus;
+    /*Value by default*/
+    int childreturnstatus = -1;
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
-    sigset_t unBlockMask;   /*Used by the child process in order to unblock the SIGCHLD signal, which was blocked by the main process.*/
     int pollReturn;
+    unsigned char *tokenized_command;
 
 
-    /*Value by default*/
-    (*returnstatus) = -1;
 
 	
     out[0] = out[1] = err[0] = err[1]  = -1;
@@ -728,18 +660,11 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
         closeSafely (sockfd);
         closeSafely (socket);
 
-        /*TODO: I should use execve with setlocale and the environment instead of system.*/
-        /*During execution of the command, SIGCHLD will be blocked, and SIGINT and SIGQUIT*/
-        /* will be ignored. From man system(3)*/
-        /*Attention: warning about signedness. I guess it does not hurt me.*/
-        /*TODO: usar para el retorno de system una variable local mejor que la variable compartida????*/
-        *returnstatus=system(command);
-        if (WIFEXITED(returnstatus) == 1)
-            (*returnstatus) = WEXITSTATUS(*returnstatus);
-        else
-            (*returnstatus) = -1;
-        /*Going to zombie state, hopefully waitpid will catch it*/
-        _exit(EXIT_SUCCESS);
+        /*string tokenizer*/
+        tokenized_command = strtok(command, " ");
+        /*TODO: I should use execve with setlocale and the environment.*/
+        HERE EXECV
+
     }
     else {
         /*Parent process*/
@@ -817,10 +742,15 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
                 waitpidReturn = TEMP_FAILURE_RETRY(waitpid(pid, &status, WNOHANG));
                 if(waitpidReturn > 0) {
                     /*Child is dead, we can finish the connection*/
+
                     /*First of all, we check the exit status of our child process*/
-                    /*In case of error send an error status to the remote calling process*/
-                    if (WIFEXITED(status) != 1)
-                        goto err;
+                    if (WIFEXITED(status)) {
+                        /* The child exited normally; get its exit code.*/
+                        childreturnstatus = WEXITSTATUS(status);
+                    }
+                    else
+                        /*In case of error send an error status to the remote calling process*/
+                        childreturnstatus = -1;
                     break;
                 }
                 else if(waitpidReturn < 0) {
@@ -840,9 +770,6 @@ int fork_system(int socket, unsigned char *command, int *returnstatus)
             }
         }
     }
-    /*Stuff just done by the parent process. The child process ends with exit*/
-    /*Reaching this code when child ends in the expected way*/
-    childreturnstatus = *returnstatus;
     
 end:
     bzero(buf,2000);
