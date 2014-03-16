@@ -107,3 +107,11 @@ int wait_for_closed_socket (int socket, long timeout);
 
 
 int polite_kill_and_wait(pid_t pid);
+
+
+
+char* create_arg(char * token);
+
+
+
+char** create_args(char *command);

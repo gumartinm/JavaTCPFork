@@ -17,7 +17,6 @@
 #include <signal.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <strings.h>
 #include <pthread.h>
 #include <sys/wait.h>
 #include <sys/poll.h>
@@ -159,7 +158,7 @@ int main_daemon (char *address, int port, int queue)
 		goto err;
 	}
 	
-	bzero((char*) &addr_server, sizeof(addr_server));
+    memset((char*) &addr_server, 0, sizeof(addr_server));
 	addr_server.sin_family = AF_INET;
 	if (inet_pton(AF_INET, address, &addr_server.sin_addr.s_addr) <= 0) {
 		syslog (LOG_ERR, "error inet_pton: %m");
@@ -319,7 +318,7 @@ void *serverThread (void * arg)
 
     /*1. COMMAND LENGTH*/
     /*First of all we receive the command size as a Java integer (4 bytes primitive type)*/
-    bzero(buffer, sizeof(buffer));
+    memset(buffer, 0, sizeof(buffer));
 
     if (receive_from_socket (socket, buffer, sizeof(uint32_t), timeout, utimeout) < 0)
         goto err;
@@ -337,7 +336,7 @@ void *serverThread (void * arg)
         goto err;
     }
 
-    bzero(command, ((commandLength) + 1));
+    memset(command, 0, ((commandLength) + 1));
 
     /*Wait max 2 seconds for data coming from client, otherwise exits with error.*/
     if (receive_from_socket (socket, command, commandLength, timeout, utimeout) < 0)
@@ -581,8 +580,7 @@ int polite_kill_and_wait(pid_t pid)
     }
 
     /*We are not sure if the child process is dead. In this case, */
-    /*probably the child process is going to be an orphan and its */
-    /*system process (if there is one) as well*/
+    /*probably the child process is going to be an orphan one. */
     syslog (LOG_ERR, "waitpid after SIGKILL did not work either: %m");
 
     return -1;
@@ -603,8 +601,9 @@ int fork_system(int socket, unsigned char *command)
     int childreturnstatus = -1;
     int returnValue = 0;    /*return value from this function can be caught by upper layers,*/
                             /*OK by default*/
+    sigset_t unBlockMask;   /*Used by the child process in order to unblock the SIGCHLD signal, which was blocked by the main process.*/
     int pollReturn;
-    unsigned char *tokenized_command;
+    char **args;
 
 
 
@@ -660,11 +659,24 @@ int fork_system(int socket, unsigned char *command)
         closeSafely (sockfd);
         closeSafely (socket);
 
-        /*string tokenizer*/
-        tokenized_command = strtok(command, " ");
-        /*TODO: I should use execve with setlocale and the environment.*/
-        HERE EXECV
+        args = create_args(command);
+        if (args == NULL) {
+            syslog (LOG_ERR, "create args error: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            _exit(EXIT_FAILURE);
+        }
 
+        if (args[0] == NULL) {
+            syslog (LOG_ERR, "command not found: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            _exit(EXIT_FAILURE);
+        }
+
+        if (execvp(args[0], (char **) args) < 0) {
+            syslog (LOG_ERR, "execvp error: %m");
+            /*Going to zombie state, hopefully waitpid will catch it*/
+            _exit(EXIT_FAILURE);
+        }
     }
     else {
         /*Parent process*/
@@ -680,7 +692,7 @@ int fork_system(int socket, unsigned char *command)
             pollReturn = poll(polls, 2, 100);
             if(pollReturn > 0) {
                 if(polls[0].revents && POLLIN) {
-                    bzero(buf,2000);
+                    memset(buf, 0, 2000);
                     n=TEMP_FAILURE_RETRY(read(out[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
                     //To network order, indeed it is the order used by Java (BIG ENDIAN). Anyway I am 
                     //swapping the bytes because it is required if you want to write portable code and 
@@ -713,7 +725,7 @@ int fork_system(int socket, unsigned char *command)
                 }
  
                 if(polls[1].revents && POLLIN) {
-                    bzero(buf,2000);
+                    memset(buf, 0, 2000);
                     n=TEMP_FAILURE_RETRY(read(err[0], &buf[sizeof(struct tcpforkhdr)], 2000-sizeof(struct tcpforkhdr)));
                     header->type = htonl(2);
                     header->length = htonl(n);
@@ -748,9 +760,10 @@ int fork_system(int socket, unsigned char *command)
                         /* The child exited normally; get its exit code.*/
                         childreturnstatus = WEXITSTATUS(status);
                     }
-                    else
+                    else {
                         /*In case of error send an error status to the remote calling process*/
                         childreturnstatus = -1;
+                    }
                     break;
                 }
                 else if(waitpidReturn < 0) {
@@ -772,7 +785,7 @@ int fork_system(int socket, unsigned char *command)
     }
     
 end:
-    bzero(buf,2000);
+    memset(buf, 0, 2000);
     header->type = htonl(3);
     header->length = htonl((childreturnstatus));
     // Avoid SIGPIPE with MSG_NOSIGNAL flag. It just works on Linux OS (non portable code)
@@ -791,6 +804,80 @@ err:
     returnValue = -1;
 	goto end;
 }
+
+
+
+char* create_arg(char * token)
+{
+    size_t arg_len;
+    char * arg;
+    arg_len = strlen(token);
+
+    if((arg = (char *)(malloc(sizeof(char) * (arg_len + 1)))) == NULL ) {
+        syslog (LOG_ERR, "create arg malloc error: %m");
+        return NULL;
+    }
+    memset(arg, 0, arg_len + 1);
+    memcpy(arg, token, arg_len);
+
+    return arg;
+}
+
+
+
+char** create_args(char *command)
+{
+    unsigned int ARGS_SIZE = 50;
+    char delim[] = " \t\n\r\f";
+    char *token;
+    char **args;
+    char *arg;
+    int args_count = 0;
+    int index;
+
+    if ((args = (char *) malloc(sizeof(char *) * ARGS_SIZE)) == NULL) {
+        syslog (LOG_ERR, "init args malloc error: %m");
+        return NULL;
+    }
+
+    token = strtok(command, delim);
+
+    while (token != NULL) {
+        if ((arg = create_arg(token)) == NULL) {
+            syslog (LOG_ERR, "create arg error: %m");
+            goto err;
+        }
+        args[args_count] = arg;
+
+        args_count += 1;
+
+        if (args_count >= ARGS_SIZE) {
+            // TODO: check UINT_MAX limit
+            ARGS_SIZE = ARGS_SIZE + 100;
+
+            if ((args = (char *) realloc(args, sizeof(char *) * ARGS_SIZE)) == NULL) {
+                syslog (LOG_ERR, "create args realloc error: %m");
+                goto err;
+            }
+        }
+
+        token = strtok(NULL, delim);
+    }
+
+end:
+    args[args_count] = NULL;
+    return args;
+err:
+    /*Release memory.*/
+    for (index = (args_count - 1); index >= 0; index--) {
+        free(args[index]);
+    }
+    free(args);
+    /*Return error.*/
+    args = NULL;
+    goto end;
+}
+
 
 
 void sigint_handler(int sig)
