@@ -864,8 +864,8 @@ char** create_args(char *command)
         token = strtok(NULL, delim);
     }
 
-end:
     args[args_count] = NULL;
+end:
     return args;
 err:
     /*Release memory.*/
