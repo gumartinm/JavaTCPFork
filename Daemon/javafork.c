@@ -624,9 +624,21 @@ int fork_system(int socket, unsigned char *command)
 
     if (pid == 0) {
         /*Child process*/
-        /*It has to launch another one using system or better directly using execve*/
 
         /*Unblock SIGCHLD*/
+        // From man sigaction(2):
+        // A child created via fork(2) inherits a copy of its parent's signal dispositions.
+        // From man execve(2):
+        // * The dispositions of any signals that are being caught (handled signals) are reset to the default (signal(7))
+        // So, the signal handlers are not inherited!! Using the clone function directly, wich is used by execv* functions, you could do more things
+        // (even inherit signal handlers) but never use the clone function!!
+        // * POSIX.1-2001 specifies that the dispositions of any signals that are ignored or set to the default are left unchanged. POSIX.1-2001
+        // specifies one exception: if SIGCHLD is being ignored, then an implementation may leave the disposition unchanged or reset it to the
+        // default; Linux does the former.
+        // Then, SIG_IGN and SIG_DFL are inherited!!
+        // From man sigprocmask(2):
+        // A child created via fork(2) inherits a copy of its parent's signal mask; the signal mask is preserved across execve(2).
+        // This is why I must unblock SIGCHLD!!
         if (sigemptyset(&unBlockMask) < 0) {
             syslog (LOG_ERR, "Unblock SIGCHLD empty mask: %m");
             /*Going to zombie state, hopefully waitpid will catch it*/
