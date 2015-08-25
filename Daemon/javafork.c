@@ -37,12 +37,6 @@ int sockfd = -1;                /*Stores the daemon server TCP socket.*/
 
 
 
-static int closeSafely(int fd) 
-{
-    /*If we always initialize file descriptor variables with value -1*/
-    /*this method should work like a charm*/
-    return (fd == -1) ? 0 : TEMP_FAILURE_RETRY(close(fd));
-}
 
 
 
@@ -226,7 +220,7 @@ int main_daemon (char *address, int port, int queue)
 	}
 
 end:
-    closeSafely (sockfd);
+    close (sockfd);
     return returnValue;
 err:
 	/*When there is an error.*/
@@ -242,7 +236,7 @@ int daemonize(const char *pname, int facility, int option)
 	
 	if ((fd = TEMP_FAILURE_RETRY(open( "/dev/tty", O_RDWR, 0))) == -1) {
         /*We already have no tty control*/
-        closeSafely(fd);
+        close(fd);
         return 0;
 	}
 
@@ -256,24 +250,24 @@ int daemonize(const char *pname, int facility, int option)
 		return -1;
 	}
 
-	if (closeSafely(fd) < 0) {
+	if (close(fd) < 0) {
 		syslog (LOG_ERR, "Closing tty failed: %m");
 		return -1;
 	}
 	
 	if ((fd = TEMP_FAILURE_RETRY(open( "/dev/null", O_RDWR, 0))) == -1) {
-		closeSafely(fd);
+		close(fd);
 		return -1;
 	}
 
 	if (TEMP_FAILURE_RETRY(dup2(fd,0)) < 0 || 
         TEMP_FAILURE_RETRY(dup2(fd,1)) < 0 ||
         TEMP_FAILURE_RETRY(dup2(fd,2)) < 0) {
-	    closeSafely(fd);
+	    close(fd);
         return -1;
     }
 
-    closeSafely(fd);	
+    close(fd);
 
     return 0;
 }
@@ -362,7 +356,7 @@ void *serverThread (void * arg)
 
 err:
     free(command);
-    closeSafely(socket);
+    close(socket);
 
     pthread_exit(0);
 }
@@ -664,12 +658,12 @@ int fork_system(int socket, unsigned char *command)
         }
 
         /*Close useless file descriptors. The child inherits copies of the parent's set of open file descriptors. See as well: CLOEXEC*/
-        closeSafely (out[0]);
-        closeSafely (out[1]);
-        closeSafely (err[0]);
-        closeSafely (err[1]);
-        closeSafely (sockfd);
-        closeSafely (socket);
+        close (out[0]);
+        close (out[1]);
+        close (err[0]);
+        close (err[1]);
+        close (sockfd);
+        close (socket);
 
         args = create_args(command);
         if (args == NULL) {
@@ -806,10 +800,10 @@ end:
     if (TEMP_FAILURE_RETRY(send(socket, buf, sizeof(struct tcpforkhdr), MSG_NOSIGNAL)) < 0)
         syslog (LOG_INFO, "error while sending return status: %m");
 
-    closeSafely (out[0]);
-    closeSafely (out[1]);
-    closeSafely (err[0]);
-    closeSafely (err[1]);
+    close (out[0]);
+    close (out[1]);
+    close (err[0]);
+    close (err[1]);
     return returnValue;
 err:
     childreturnstatus = -1;
@@ -900,7 +894,7 @@ void sigint_handler(int sig)
     }
 
 
-    closeSafely (sockfd);
+    close (sockfd);
     /*TODO: kill child processes, finish threads and release allocate memory*/
     /* From http://www.cons.org/cracauer/sigint.html
      * Since a shellscript may in turn be called by a shellscript, you need to make sure that you properly
