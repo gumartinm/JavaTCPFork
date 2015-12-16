@@ -907,7 +907,15 @@ void sigint_handler(int sig)
      */
     if (sigaction(SIGINT, &sigintAction, NULL) < 0) {
         syslog (LOG_ERR, "SIGINT restore signal handler failed: %m");
-        exit (EXIT_FAILURE);
+        /* man 7 signal
+         * Async-signal-safe functions
+         * A signal handler function must be very careful, since processing elsewhere may be interrupted at some arbitrary
+         * point in the execution of the program.  POSIX has the concept of "safe  function". If a signal interrupts the
+         * execution of an unsafe function, and handler calls an unsafe function, then the behavior of the program is undefined.
+         *
+         * From sig handler I MAY USE JUST _exit
+         */
+        _exit (EXIT_FAILURE);
     }
     kill(getpid(), SIGINT);
 }
